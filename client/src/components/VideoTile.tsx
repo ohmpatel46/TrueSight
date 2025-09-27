@@ -9,26 +9,72 @@ interface VideoTileProps {
 
 const VideoTile: React.FC<VideoTileProps> = ({ stream, peerId, isLocal, isEnabled }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const DEBUG_ENABLED = true;
+
+  const debug = (...args: unknown[]) => {
+    if (DEBUG_ENABLED) {
+      // eslint-disable-next-line no-console
+      console.log(`[VideoTile:${peerId}]`, ...args);
+    }
+  };
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      console.log(`Setting video stream for ${peerId}:`, stream);
-      console.log(`Stream tracks:`, stream.getTracks());
-      videoRef.current.srcObject = stream;
-      
+    const videoEl = videoRef.current;
+
+    if (!videoEl) {
+      return;
+    }
+
+    videoEl.setAttribute('playsinline', 'true');
+    debug('useEffect triggered', {
+      hasStream: !!stream,
+      readyState: videoEl.readyState,
+      muted: videoEl.muted,
+      currentSrc: videoEl.currentSrc
+    });
+
+    if (stream) {
+      debug('attach stream', {
+        streamId: stream.id,
+        videoTracks: stream.getVideoTracks().map(t => ({ id: t.id, readyState: t.readyState, enabled: t.enabled })),
+        audioTracks: stream.getAudioTracks().map(t => ({ id: t.id, readyState: t.readyState, enabled: t.enabled }))
+      });
+
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+        debug('srcObject set');
+      }
+
       // Add event listeners to debug
-      videoRef.current.onloadedmetadata = () => {
-        console.log(`Video metadata loaded for ${peerId}`);
+      videoEl.onloadedmetadata = () => {
+        debug('onloadedmetadata', { readyState: videoEl.readyState });
       };
-      videoRef.current.oncanplay = () => {
-        console.log(`Video can play for ${peerId}`);
+      videoEl.oncanplay = () => {
+        debug('oncanplay', { readyState: videoEl.readyState });
       };
-      videoRef.current.onerror = (e) => {
-        console.error(`Video error for ${peerId}:`, e);
+      videoEl.onerror = (e) => {
+        debug('onerror', e);
       };
-    } else if (videoRef.current) {
-      console.log(`No stream for ${peerId}`);
-      videoRef.current.srcObject = null;
+      videoEl.onloadstart = () => {
+        debug('onloadstart');
+      };
+
+      const playPromise = videoEl.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.catch((err) => {
+          debug('play() blocked', err);
+          if (!isLocal && videoEl.muted === false) {
+            videoEl.muted = true;
+            debug('retry play with muted=true');
+            videoEl.play().catch((retryErr) => {
+              debug('retry play blocked', retryErr);
+            });
+          }
+        });
+      }
+    } else {
+      debug('detach stream');
+      videoEl.srcObject = null;
     }
   }, [stream, peerId]);
 
@@ -46,6 +92,13 @@ const VideoTile: React.FC<VideoTileProps> = ({ stream, peerId, isLocal, isEnable
       <div className="absolute top-2 left-2 bg-red-500 text-white px-2 py-1 rounded text-xs">
         {stream ? 'HAS STREAM' : 'NO STREAM'}
       </div>
+      
+      {/* Stream info */}
+      {stream && (
+        <div className="absolute top-2 right-2 bg-blue-500 text-white px-2 py-1 rounded text-xs">
+          {stream.getVideoTracks().length}V {stream.getAudioTracks().length}A
+        </div>
+      )}
       
       {!isEnabled && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-75">

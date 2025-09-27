@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { Peer, MediaConnection } from 'peerjs';
 import VideoTile from './components/VideoTile';
 import Controls from './components/Controls';
 import EventLog from './components/EventLog';
 
-interface Peer {
+interface PeerInfo {
   id: string;
-  connection: RTCPeerConnection;
+  connection?: MediaConnection;
   stream?: MediaStream;
-  processingOffer?: boolean;
 }
 
 interface LogEntry {
@@ -19,12 +19,10 @@ interface LogEntry {
 
 const App: React.FC = () => {
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [peer, setPeer] = useState<Peer | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [isRoomCreator, setIsRoomCreator] = useState(false);
-  const [processedOffers, setProcessedOffers] = useState<Set<string>>(new Set());
   const [roomName, setRoomName] = useState('');
   const [signalingUrl, setSignalingUrl] = useState(() => {
-    // Auto-detect signaling URL based on current host
     const hostname = window.location.hostname;
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:3001';
@@ -32,75 +30,48 @@ const App: React.FC = () => {
       return `http://${hostname}:3001`;
     }
   });
+
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [peers, setPeers] = useState<Map<string, Peer>>(new Map());
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const [peers, setPeers] = useState<Map<string, PeerInfo>>(new Map());
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLocalVideoEnabled, setIsLocalVideoEnabled] = useState(true);
+  const [myPeerId, setMyPeerId] = useState<string>('');
 
-  // Check browser compatibility on mount
-  useEffect(() => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      addLog('Warning: Camera/microphone not supported on this device', 'warning');
+  const DEBUG_ENABLED = true;
+
+  const debugLog = (...args: unknown[]) => {
+    if (DEBUG_ENABLED) {
+      // eslint-disable-next-line no-console
+      console.log('[DEBUG]', ...args);
     }
-    if (!window.RTCPeerConnection) {
-      addLog('Warning: WebRTC not supported on this device', 'warning');
-    }
-  }, []);
+  };
 
   const addLog = (message: string, type: LogEntry['type'] = 'info') => {
     setLogs(prev => [...prev, { timestamp: new Date(), message, type }]);
+    // eslint-disable-next-line no-console
+    console.log(`[LOG] ${type.toUpperCase()}: ${message}`);
   };
 
-  const createPeerConnection = (peerId: string): RTCPeerConnection => {
-    addLog(`Creating peer connection for ${peerId}`, 'info');
-    
-    const configuration = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
-    };
-
-    const peerConnection = new RTCPeerConnection(configuration);
-
-    // Handle incoming tracks
-    peerConnection.ontrack = (event) => {
-      addLog(`Received track from ${peerId}`, 'success');
-      addLog(`Track info: ${event.track.kind} track, ${event.streams.length} streams`, 'info');
-      setPeers(prev => {
-        const newPeers = new Map(prev);
-        const peer = newPeers.get(peerId);
-        if (peer) {
-          peer.stream = event.streams[0];
-          newPeers.set(peerId, peer);
-        }
-        return newPeers;
-      });
-    };
-
-    // Handle ICE candidates
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit('signaling', {
-          type: 'ice-candidate',
-          room: roomName,
-          from: socket.id,
-          to: peerId,
-          data: event.candidate
-        });
-      }
-    };
-
-    // Handle connection state changes
-    peerConnection.onconnectionstatechange = () => {
-      addLog(`Connection state with ${peerId}: ${peerConnection.connectionState}`, 'info');
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      addLog(`ICE connection state with ${peerId}: ${peerConnection.iceConnectionState}`, 'info');
-    };
-
-    return peerConnection;
+  const updatePeers = (updater: (peers: Map<string, PeerInfo>) => Map<string, PeerInfo>) => {
+    setPeers(prev => {
+      const newPeers = updater(prev);
+      addLog(`📊 Peers updated: ${newPeers.size} peers total`, 'info');
+      debugLog('Peer snapshot', Array.from(newPeers.values()).map(p => ({
+        id: p.id,
+        hasStream: !!p.stream,
+        hasConnection: !!p.connection
+      })));
+      return newPeers;
+    });
   };
+
+  // Initialize PeerJS
+  useEffect(() => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      addLog('Warning: Camera/microphone not supported on this device', 'warning');
+    }
+  }, []);
 
   const joinRoom = async () => {
     if (!roomName.trim()) {
@@ -109,247 +80,209 @@ const App: React.FC = () => {
     }
 
     try {
-      // Try to get local media stream, but don't fail if not available
-      let stream = null;
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-          });
-          setLocalStream(stream);
-          addLog('Local media stream obtained', 'success');
-        } catch (error) {
-          addLog(`Camera/microphone not available: ${error.message}`, 'warning');
-          addLog('Joining as viewer only (no local video)', 'info');
-        }
-      } else {
-        addLog('Camera/microphone not supported on this device', 'warning');
-        addLog('Joining as viewer only (no local video)', 'info');
+      // Get local media stream
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        setLocalStream(stream);
+        localStreamRef.current = stream;
+        addLog('Local media stream obtained', 'success');
+        debugLog('Local media stream tracks', stream.getTracks().map(t => `${t.kind}:${t.readyState}`));
+      } catch (err) {
+        addLog(`No local camera/mic: joining as viewer (reason: ${(err as Error)?.message ?? err})`, 'warning');
       }
 
-      // Connect to signaling server
-      addLog(`Attempting to connect to: ${signalingUrl}`, 'info');
-      const newSocket = io(signalingUrl);
-      setSocket(newSocket);
-
-      newSocket.on('connect', () => {
-        addLog(`✅ Connected to signaling server (${signalingUrl})`, 'success');
-        addLog(`Socket ID: ${newSocket.id}`, 'info');
-        setIsConnected(true);
-        addLog(`Joining room: ${roomName}`, 'info');
-        newSocket.emit('join-room', { room: roomName });
-      });
-
-      newSocket.on('connect_error', (error) => {
-        addLog(`❌ Connection error: ${error.message}`, 'error');
-        addLog(`Failed to connect to: ${signalingUrl}`, 'error');
-        setIsConnected(false);
-      });
-
-      newSocket.on('disconnect', (reason) => {
-        addLog(`⚠️ Disconnected: ${reason}`, 'warning');
-        setIsConnected(false);
-      });
-
-      newSocket.on('existing-peers', ({ peers }: { peers: string[] }) => {
-        addLog(`Found ${peers.length} existing peers`, 'info');
-        
-        if (peers.length === 0) {
-          // We're the first peer - we're the room creator
-          setIsRoomCreator(true);
-          addLog(`🏠 ROLE: Room Creator (waiting for others to join)`, 'info');
-        } else {
-          // We're joining an existing room - we're the joiner
-          setIsRoomCreator(false);
-          addLog(`🚪 ROLE: Room Joiner (will initiate offers)`, 'info');
-        }
-        
-        // Create connections to existing peers
-        peers.forEach(peerId => {
-          const peerConnection = createPeerConnection(peerId);
-          setPeers(prev => new Map(prev).set(peerId, { id: peerId, connection: peerConnection }));
-
-          // Add local stream to peer connection (if available)
-          if (stream) {
-            stream.getTracks().forEach(track => {
-              peerConnection.addTrack(track, stream);
-            });
-          }
-
-          // Room creator waits, joiner initiates
-          if (peers.length === 0) {
-            addLog(`⏳ ROOM CREATOR: Waiting for offer from ${peerId}`, 'info');
-          } else {
-            addLog(`🚀 ROOM JOINER: Will create offer for ${peerId}`, 'info');
-            // Create offer immediately since we're the joiner
-            peerConnection.createOffer().then(offer => {
-              addLog(`✅ Created offer for existing peer ${peerId}`, 'info');
-              peerConnection.setLocalDescription(offer);
-              newSocket.emit('signaling', {
-                type: 'offer',
-                room: roomName,
-                from: newSocket.id,
-                to: peerId,
-                data: offer
-              });
-              addLog(`📤 Sent offer to existing peer ${peerId}`, 'info');
-            }).catch(error => {
-              addLog(`❌ Error creating offer for existing peer ${peerId}: ${error}`, 'error');
-            });
-          }
-        });
-      });
-
-      newSocket.on('peer-joined', ({ peerId }: { peerId: string }) => {
-        addLog(`New peer joined: ${peerId}`, 'info');
-        
-        // Create connection to new peer
-        const peerConnection = createPeerConnection(peerId);
-        setPeers(prev => new Map(prev).set(peerId, { id: peerId, connection: peerConnection }));
-
-        // Add local stream to peer connection (if available)
-        if (stream) {
-          stream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, stream);
-          });
-        }
-
-        // Room creators initiate offers to new peers, joiners wait
-        // Check if we have existing peers to determine our role
-        const currentPeerCount = peers.size;
-        if (currentPeerCount === 0) {
-          // We're the room creator - initiate offer to new peer
-          addLog(`🏠 ROOM CREATOR: Creating offer for new peer ${peerId}`, 'info');
-          peerConnection.createOffer().then(offer => {
-            addLog(`✅ Created offer for new peer ${peerId}`, 'info');
-            peerConnection.setLocalDescription(offer);
-            newSocket.emit('signaling', {
-              type: 'offer',
-              room: roomName,
-              from: newSocket.id,
-              to: peerId,
-              data: offer
-            });
-            addLog(`📤 Sent offer to new peer ${peerId}`, 'info');
-          }).catch(error => {
-            addLog(`❌ Error creating offer for new peer ${peerId}: ${error}`, 'error');
-          });
-        } else {
-          // We're a joiner - wait for offer from new peer
-          addLog(`🚪 ROOM JOINER: Waiting for offer from new peer ${peerId}`, 'info');
-        }
-      });
-
-      newSocket.on('peer-left', ({ peerId }: { peerId: string }) => {
-        addLog(`Peer left: ${peerId}`, 'warning');
-        setPeers(prev => {
-          const newPeers = new Map(prev);
-          const peer = newPeers.get(peerId);
-          if (peer) {
-            peer.connection.close();
-            newPeers.delete(peerId);
-          }
-          return newPeers;
-        });
-      });
-
-      newSocket.on('signaling', async ({ type, from, data }: any) => {
-        addLog(`📨 NEW LOGIC: Received ${type} from ${from}`, 'info');
-        
-        // Get peer from current state using setPeers callback
-        setPeers(currentPeers => {
-          const peer = currentPeers.get(from);
-          if (!peer) {
-            addLog(`No peer connection found for ${from}`, 'warning');
-            return currentPeers;
-          }
-
-          // Handle signaling message asynchronously
-          (async () => {
-            try {
-              switch (type) {
-                case 'offer':
-                  addLog(`📥 Processing offer from ${from}, current state: ${peer.connection.signalingState}`, 'info');
-                  
-                  // Create unique offer ID for duplicate detection
-                  const offerId = `${from}-${data.sdp?.slice(0, 20) || 'unknown'}`;
-                  
-                  // Check if we've already processed this exact offer
-                  if (processedOffers.has(offerId)) {
-                    addLog(`⚠️ Already processed offer ${offerId}, ignoring duplicate`, 'warning');
-                    break;
-                  }
-                  
-                  if (peer.connection.signalingState === 'stable') {
-                    addLog(`✅ Connection stable, processing offer from ${from}`, 'info');
-                    
-                    // Mark offer as processed
-                    setProcessedOffers(prev => new Set(prev).add(offerId));
-                    
-                    try {
-                      await peer.connection.setRemoteDescription(data);
-                      const answer = await peer.connection.createAnswer();
-                      await peer.connection.setLocalDescription(answer);
-                      
-                      newSocket.emit('signaling', {
-                        type: 'answer',
-                        room: roomName,
-                        from: newSocket.id,
-                        to: from,
-                        data: answer
-                      });
-                      addLog(`📤 Sent answer to ${from}`, 'info');
-                    } catch (error) {
-                      addLog(`❌ Error processing offer from ${from}: ${error}`, 'error');
-                      // Remove from processed set on error so it can be retried
-                      setProcessedOffers(prev => {
-                        const newSet = new Set(prev);
-                        newSet.delete(offerId);
-                        return newSet;
-                      });
-                    }
-                  } else if (peer.connection.signalingState === 'have-local-offer') {
-                    addLog(`⚠️ Already have local offer, ignoring offer from ${from}`, 'warning');
-                  } else {
-                    addLog(`❌ Ignoring offer from ${from} - wrong state: ${peer.connection.signalingState}`, 'warning');
-                  }
-                  break;
-
-                case 'answer':
-                  addLog(`📥 Processing answer from ${from}, current state: ${peer.connection.signalingState}`, 'info');
-                  if (peer.connection.signalingState === 'have-local-offer') {
-                    addLog(`✅ Have local offer, processing answer from ${from}`, 'info');
-                    await peer.connection.setRemoteDescription(data);
-                    addLog(`✅ Received answer from ${from}`, 'success');
-                  } else if (peer.connection.signalingState === 'stable') {
-                    addLog(`ℹ️ Answer from ${from} received but connection already established`, 'info');
-                  } else {
-                    addLog(`❌ Ignoring answer from ${from} - wrong state: ${peer.connection.signalingState}`, 'warning');
-                  }
-                  break;
-
-                case 'ice-candidate':
-                  if (peer.connection.remoteDescription) {
-                    await peer.connection.addIceCandidate(data);
-                    addLog(`Added ICE candidate from ${from}`, 'info');
-                  } else {
-                    addLog(`Ignoring ICE candidate from ${from} - no remote description`, 'warning');
-                  }
-                  break;
-              }
-            } catch (error) {
-              addLog(`Error handling ${type} from ${from}: ${error}`, 'error');
+      // Create PeerJS peer with free TURN servers
+      addLog('Creating PeerJS peer...', 'info');
+      const newPeer = new Peer({
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { 
+              urls: 'turn:0.peerjs.com:3478', 
+              username: 'peerjs', 
+              credential: 'peerjsp' 
             }
-          })();
+          ]
+        },
+        debug: DEBUG_ENABLED ? 2 : 0
+      });
 
-          return currentPeers;
+      setPeer(newPeer);
+
+      newPeer.on('open', (id) => {
+        addLog(`✅ PeerJS connected with ID: ${id}`, 'success');
+        setMyPeerId(id);
+        debugLog('PeerJS peer opened', { id });
+
+        // Connect to signaling server
+        addLog(`Connecting to signaling: ${signalingUrl}`, 'info');
+        const newSocket = io(signalingUrl);
+        setSocket(newSocket);
+
+        newSocket.on('connect', () => {
+          addLog(`✅ Connected to signaling (${signalingUrl}), socket=${newSocket.id}`, 'success');
+          setIsConnected(true);
+          newSocket.emit('join-room', { room: roomName, peerId: id });
+          addLog(`Joining room: ${roomName}`, 'info');
+        });
+
+        newSocket.on('connect_error', (e) => {
+          addLog(`❌ Signaling connection error: ${e.message}`, 'error');
+          setIsConnected(false);
+        });
+
+        newSocket.on('disconnect', (reason) => {
+          addLog(`⚠️ Disconnected from signaling: ${reason}`, 'warning');
+          setIsConnected(false);
+        });
+
+        // Handle existing peers in room
+        newSocket.on('existing-peers', ({ peers }: { peers: string[] }) => {
+          addLog(`Found ${peers.length} existing peers`, 'info');
+          debugLog('existing-peers payload', peers);
+
+          // Call each existing peer
+          peers.forEach(peerId => {
+            if (peerId !== id) { // Don't call ourselves
+              addLog(`📞 Calling existing peer: ${peerId}`, 'info');
+              debugLog('Calling peer', peerId);
+              
+              const call = newPeer.call(peerId, stream || new MediaStream());
+              
+              updatePeers(prev => new Map(prev).set(peerId, { 
+                id: peerId, 
+                connection: call 
+              }));
+
+              call.on('stream', (remoteStream) => {
+                addLog(`📺 Received stream from ${peerId}`, 'success');
+                debugLog('Received stream from peer', {
+                  peerId,
+                  streamId: remoteStream.id,
+                  tracks: remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}`)
+                });
+                
+                updatePeers(prev => {
+                  const newPeers = new Map(prev);
+                  const peerInfo = newPeers.get(peerId);
+                  if (peerInfo) {
+                    peerInfo.stream = remoteStream;
+                    newPeers.set(peerId, peerInfo);
+                  }
+                  return newPeers;
+                });
+              });
+
+              call.on('close', () => {
+                addLog(`📞 Call with ${peerId} closed`, 'warning');
+                updatePeers(prev => {
+                  const newPeers = new Map(prev);
+                  newPeers.delete(peerId);
+                  return newPeers;
+                });
+              });
+
+              call.on('error', (err) => {
+                addLog(`❌ Call error with ${peerId}: ${err}`, 'error');
+                debugLog('Call error', { peerId, error: err });
+              });
+            }
+          });
+        });
+
+        // Handle new peer joining
+        newSocket.on('peer-joined', ({ peerId }: { peerId: string }) => {
+          addLog(`New peer joined: ${peerId}`, 'info');
+          debugLog('peer-joined', peerId);
+          
+          // Don't call ourselves
+          if (peerId === id) return;
+
+          // Add to peers list (they will call us)
+          updatePeers(prev => new Map(prev).set(peerId, { id: peerId }));
+        });
+
+        // Handle peer leaving
+        newSocket.on('peer-left', ({ peerId }: { peerId: string }) => {
+          addLog(`Peer left: ${peerId}`, 'warning');
+          debugLog('peer-left', peerId);
+          updatePeers(prev => {
+            const newPeers = new Map(prev);
+            const peerInfo = newPeers.get(peerId);
+            if (peerInfo?.connection) {
+              peerInfo.connection.close();
+            }
+            newPeers.delete(peerId);
+            return newPeers;
+          });
         });
       });
 
+      // Handle incoming calls
+      newPeer.on('call', (call) => {
+        const callerPeerId = call.peer;
+        addLog(`📞 Incoming call from ${callerPeerId}`, 'info');
+        debugLog('Incoming call', { from: callerPeerId });
+
+        // Answer the call with our stream
+        call.answer(stream || new MediaStream());
+        
+        updatePeers(prev => new Map(prev).set(callerPeerId, { 
+          id: callerPeerId, 
+          connection: call 
+        }));
+
+        call.on('stream', (remoteStream) => {
+          addLog(`📺 Received stream from ${callerPeerId}`, 'success');
+          debugLog('Received stream from caller', {
+            peerId: callerPeerId,
+            streamId: remoteStream.id,
+            tracks: remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}`)
+          });
+          
+          updatePeers(prev => {
+            const newPeers = new Map(prev);
+            const peerInfo = newPeers.get(callerPeerId);
+            if (peerInfo) {
+              peerInfo.stream = remoteStream;
+              newPeers.set(callerPeerId, peerInfo);
+            }
+            return newPeers;
+          });
+        });
+
+        call.on('close', () => {
+          addLog(`📞 Call with ${callerPeerId} closed`, 'warning');
+          updatePeers(prev => {
+            const newPeers = new Map(prev);
+            newPeers.delete(callerPeerId);
+            return newPeers;
+          });
+        });
+
+        call.on('error', (err) => {
+          addLog(`❌ Call error with ${callerPeerId}: ${err}`, 'error');
+          debugLog('Call error', { peerId: callerPeerId, error: err });
+        });
+      });
+
+      newPeer.on('error', (err) => {
+        addLog(`❌ PeerJS error: ${err}`, 'error');
+        debugLog('PeerJS error', err);
+      });
+
+      newPeer.on('disconnected', () => {
+        addLog('⚠️ PeerJS disconnected', 'warning');
+      });
+
+      newPeer.on('close', () => {
+        addLog('PeerJS connection closed', 'info');
+      });
 
     } catch (error) {
-      addLog(`Error joining room: ${error}`, 'error');
+      addLog(`Error joining room: ${String(error)}`, 'error');
+      debugLog('Join room error', error);
     }
   };
 
@@ -359,28 +292,33 @@ const App: React.FC = () => {
       setSocket(null);
     }
 
-    // Close all peer connections
-    peers.forEach(peer => {
-      peer.connection.close();
-    });
-    setPeers(new Map());
-    
-    // Clear processed offers
-    setProcessedOffers(new Set());
-
-    // Stop local stream
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-      setLocalStream(null);
+    if (peer) {
+      peer.destroy();
+      setPeer(null);
     }
 
+    // Close all peer connections
+    peers.forEach(peerInfo => {
+      if (peerInfo.connection) {
+        peerInfo.connection.close();
+      }
+    });
+    setPeers(new Map());
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(t => t.stop());
+      localStreamRef.current = null;
+    }
+    setLocalStream(null);
+
     setIsConnected(false);
+    setMyPeerId('');
     addLog('Left room and closed all connections', 'info');
   };
 
   const toggleLocalVideo = () => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
+    if (localStreamRef.current) {
+      const videoTrack = localStreamRef.current.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setIsLocalVideoEnabled(videoTrack.enabled);
@@ -394,7 +332,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-100 p-4">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold text-center mb-8">Video Conference</h1>
+        <h1 className="text-3xl font-bold text-center mb-8">TrueSight Video Conference</h1>
         
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Controls */}
@@ -417,50 +355,35 @@ const App: React.FC = () => {
             <div className="bg-white rounded-lg shadow-lg p-4">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">Video Streams</h2>
-                {isConnected && (
-                  <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-                    isRoomCreator 
-                      ? 'bg-blue-100 text-blue-800' 
-                      : 'bg-green-100 text-green-800'
-                  }`}>
-                    {isRoomCreator ? '🏠 Room Creator' : '🚪 Room Joiner'}
+                {isConnected && myPeerId && (
+                  <div className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                    🆔 {myPeerId.slice(0, 8)}...
                   </div>
                 )}
               </div>
               
-              {/* Responsive grid that shows all participants */}
-              <div className={`grid gap-4 ${
-                (peers.size + (localStream ? 1 : 0)) === 1 ? 'grid-cols-1' :
-                (peers.size + (localStream ? 1 : 0)) === 2 ? 'grid-cols-1 md:grid-cols-2' :
-                (peers.size + (localStream ? 1 : 0)) === 3 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' :
-                'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
-              }`}>
-                {/* Local video tile */}
+              <div
+                className={`grid gap-4 ${
+                  (peers.size + (localStream ? 1 : 0)) === 1
+                    ? 'grid-cols-1'
+                    : (peers.size + (localStream ? 1 : 0)) === 2
+                    ? 'grid-cols-1 md:grid-cols-2'
+                    : (peers.size + (localStream ? 1 : 0)) === 3
+                    ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+                    : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+                }`}
+              >
                 {localStream && (
-                  <VideoTile
-                    stream={localStream}
-                    peerId="local"
-                    isLocal={true}
-                    isEnabled={isLocalVideoEnabled}
-                  />
+                  <VideoTile stream={localStream} peerId="local" isLocal={true} isEnabled={isLocalVideoEnabled} />
                 )}
-                
-                {/* Remote peer tiles */}
-                {Array.from(peers.values()).map(peer => {
-                  console.log(`Rendering peer ${peer.id} with stream:`, peer.stream);
+                {Array.from(peers.values()).map(peerInfo => {
+                  debugLog(`Rendering peer ${peerInfo.id}, has stream:`, !!peerInfo.stream);
                   return (
-                    <VideoTile
-                      key={peer.id}
-                      stream={peer.stream}
-                      peerId={peer.id}
-                      isLocal={false}
-                      isEnabled={true}
-                    />
+                    <VideoTile key={peerInfo.id} stream={peerInfo.stream} peerId={peerInfo.id} isLocal={false} isEnabled={true} />
                   );
                 })}
               </div>
               
-              {/* Show participant count */}
               <div className="mt-4 text-sm text-gray-600 text-center">
                 {peers.size + (localStream ? 1 : 0)} participant{(peers.size + (localStream ? 1 : 0)) !== 1 ? 's' : ''} in room
               </div>
@@ -468,12 +391,10 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Event Log */}
         <div className="mt-6">
           <EventLog logs={logs} />
         </div>
 
-        {/* Mobile floating leave button */}
         {isConnected && (
           <div className="fixed bottom-4 right-4 lg:hidden z-50">
             <button
