@@ -13,11 +13,13 @@ import base64
 from typing import List, Dict, Any
 import time
 import os
+import json
 
 app = FastAPI(title="TrueSight ML Detection Service")
 
-# Global model session
-session = None
+# Global model sessions
+session = None  # DETR model for human/phone detection
+depth_session = None  # MiDaS model for depth estimation
 
 # Frame history for persistent detection
 frame_history = {}
@@ -44,6 +46,15 @@ class MalpracticeResult(BaseModel):
     malpractice_detected: bool
     alerts: List[str]
     confidence: float
+    processing_time_ms: float
+
+class DepthAnalysisResult(BaseModel):
+    depth_map_available: bool
+    laptop_screen_detected: bool
+    phone_to_laptop_distance: float  # in meters (estimated)
+    wall_boundaries: List[List[float]]  # List of wall boundary points
+    room_dimensions: Dict[str, float]  # width, height, depth estimates
+    device_positions: Dict[str, Dict[str, float]]  # laptop, phone positions in room
     processing_time_ms: float
 
 # COCO class names (DETR is typically trained on COCO)
@@ -82,6 +93,33 @@ def load_model():
         return True
     except Exception as e:
         print(f"❌ Failed to load model: {e}")
+        return False
+
+def load_depth_model():
+    """Load the MiDaS depth estimation ONNX model"""
+    global depth_session
+    
+    # Assuming MiDaS model is placed in models/depth/
+    depth_model_path = os.path.join("models", "depth", "model.onnx")
+    
+    if not os.path.exists(depth_model_path):
+        print(f"⚠️ MiDaS depth model not found: {depth_model_path}")
+        print("📝 Note: Place MiDaS ONNX model in models/depth/model.onnx for depth analysis")
+        return False
+    
+    try:
+        depth_session = ort.InferenceSession(depth_model_path)
+        print(f"✅ MiDaS depth model loaded from {depth_model_path}")
+        
+        # Print model info
+        inputs = depth_session.get_inputs()
+        outputs = depth_session.get_outputs()
+        print(f"📊 Depth Model: {len(inputs)} inputs, {len(outputs)} outputs")
+        print(f"  Input: {inputs[0].name} {inputs[0].shape}")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Failed to load depth model: {e}")
         return False
 
 def mask_laptop_screens(image: np.ndarray) -> np.ndarray:
@@ -123,6 +161,163 @@ def mask_laptop_screens(image: np.ndarray) -> np.ndarray:
                     print(f"🖥️ Masked screen area: {x},{y} {w}x{h} (aspect: {aspect_ratio:.2f})")
     
     return image
+
+def preprocess_depth_image(image: np.ndarray) -> np.ndarray:
+    """
+    Preprocess image for MiDaS depth estimation
+    MiDaS typically expects RGB input of specific size (384x384 for MiDaS v2)
+    """
+    # Resize image to MiDaS input size (assuming 384x384)
+    target_size = (384, 384)
+    resized = cv2.resize(image, target_size)
+    
+    # Convert BGR to RGB (OpenCV uses BGR, MiDaS expects RGB)
+    rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    
+    # Normalize to [0, 1] range
+    normalized = rgb_image.astype(np.float32) / 255.0
+    
+    # MiDaS expects CHW format (channels first) and batch dimension
+    chw_image = np.transpose(normalized, (2, 0, 1))  # HWC to CHW
+    batch_image = np.expand_dims(chw_image, axis=0)  # Add batch dimension
+    
+    return batch_image
+
+def analyze_depth_map(depth_map: np.ndarray, original_image: np.ndarray) -> Dict[str, Any]:
+    """
+    Analyze depth map to extract room information and device positions
+    """
+    # Normalize depth map for analysis
+    depth_normalized = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+    
+    # Convert to 8-bit for OpenCV operations
+    depth_8bit = (depth_normalized * 255).astype(np.uint8)
+    
+    # Detect laptop screen (typically a rectangular bright area in the center)
+    laptop_screen_detected = detect_laptop_screen(depth_8bit, original_image)
+    
+    # Estimate phone to laptop distance
+    phone_to_laptop_distance = estimate_phone_to_laptop_distance(depth_map, laptop_screen_detected)
+    
+    # Detect wall boundaries (areas with maximum depth)
+    wall_boundaries = detect_wall_boundaries(depth_8bit)
+    
+    # Estimate room dimensions
+    room_dimensions = estimate_room_dimensions(depth_map)
+    
+    # Estimate device positions
+    device_positions = estimate_device_positions(depth_map, laptop_screen_detected)
+    
+    return {
+        "laptop_screen_detected": laptop_screen_detected,
+        "phone_to_laptop_distance": phone_to_laptop_distance,
+        "wall_boundaries": wall_boundaries,
+        "room_dimensions": room_dimensions,
+        "device_positions": device_positions
+    }
+
+def detect_laptop_screen(depth_map: np.ndarray, original_image: np.ndarray) -> bool:
+    """
+    Detect laptop screen in the image using depth and brightness cues
+    """
+    h, w = depth_map.shape
+    center_region = depth_map[h//4:3*h//4, w//4:3*w//4]
+    
+    # Look for rectangular regions with consistent depth (screen surface)
+    # This is a simplified detection - in practice, you'd use more sophisticated methods
+    mean_depth = np.mean(center_region)
+    std_depth = np.std(center_region)
+    
+    # If center region has low depth variance, likely a flat surface (screen)
+    return std_depth < 0.1 and mean_depth < 0.7  # Thresholds to be tuned
+
+def estimate_phone_to_laptop_distance(depth_map: np.ndarray, laptop_detected: bool) -> float:
+    """
+    Estimate distance from phone to laptop screen
+    """
+    if not laptop_detected:
+        return -1.0  # Unable to determine
+    
+    h, w = depth_map.shape
+    center_region = depth_map[h//4:3*h//4, w//4:3*w//4]
+    
+    # Average depth in center region (where laptop screen likely is)
+    avg_depth = np.mean(center_region)
+    
+    # Convert normalized depth to approximate real-world distance
+    # This is a rough approximation - would need calibration in practice
+    estimated_distance = avg_depth * 3.0  # Assuming max depth represents ~3 meters
+    
+    return float(estimated_distance)
+
+def detect_wall_boundaries(depth_map: np.ndarray) -> List[List[float]]:
+    """
+    Detect wall boundaries from depth map
+    """
+    # Find contours of areas with maximum depth (walls/background)
+    threshold = int(np.max(depth_map) * 0.8)  # Areas with depth > 80% of max
+    _, binary = cv2.threshold(depth_map, threshold, 255, cv2.THRESH_BINARY)
+    
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Convert contours to simplified boundary points
+    boundaries = []
+    for contour in contours:
+        if cv2.contourArea(contour) > 1000:  # Filter small contours
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            boundary_points = [[float(pt[0][0]), float(pt[0][1])] for pt in approx]
+            boundaries.append(boundary_points)
+    
+    return boundaries
+
+def estimate_room_dimensions(depth_map: np.ndarray) -> Dict[str, float]:
+    """
+    Estimate room dimensions from depth map
+    """
+    h, w = depth_map.shape
+    
+    # Simple estimation based on depth map analysis
+    max_depth = float(np.max(depth_map))
+    avg_depth = float(np.mean(depth_map))
+    
+    # These are rough estimates - would need proper calibration
+    estimated_width = max_depth * 1.5  # Rough approximation
+    estimated_height = max_depth * 1.2  # Assuming standard ceiling height
+    estimated_depth = max_depth
+    
+    return {
+        "width": estimated_width,
+        "height": estimated_height, 
+        "depth": estimated_depth
+    }
+
+def estimate_device_positions(depth_map: np.ndarray, laptop_detected: bool) -> Dict[str, Dict[str, float]]:
+    """
+    Estimate positions of laptop and phone in the room
+    """
+    h, w = depth_map.shape
+    
+    positions = {
+        "phone": {"x": 0.0, "y": 0.0, "z": 0.0},  # Phone is at origin (camera position)
+        "laptop": {"x": 0.0, "y": 0.0, "z": 0.0}
+    }
+    
+    if laptop_detected:
+        # Estimate laptop position based on center of screen in image
+        center_x = w // 2
+        center_y = h // 2
+        
+        # Convert image coordinates to room coordinates (simplified)
+        laptop_depth = float(np.mean(depth_map[h//4:3*h//4, w//4:3*w//4]))
+        
+        positions["laptop"] = {
+            "x": (center_x - w//2) / w * 2.0,  # Normalized x position
+            "y": (center_y - h//2) / h * 1.5,  # Normalized y position  
+            "z": laptop_depth * 3.0  # Estimated z distance
+        }
+    
+    return positions
 
 def preprocess_image(image: np.ndarray) -> np.ndarray:
     """
@@ -405,6 +600,81 @@ async def detect_humans(request: FrameRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
 
+@app.post("/analyze-depth", response_model=DepthAnalysisResult)
+async def analyze_depth(request: FrameRequest):
+    """
+    Analyze depth information from phone camera frame
+    Returns room dimensions, wall boundaries, and device positions
+    """
+    start_time = time.time()
+    
+    if depth_session is None:
+        raise HTTPException(status_code=503, detail="MiDaS depth model not loaded")
+    
+    try:
+        # Decode base64 image
+        try:
+            image_data = base64.b64decode(request.data)
+            image_array = np.frombuffer(image_data, np.uint8)
+            image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            
+            if image is None:
+                raise ValueError("Failed to decode image")
+                
+            print(f"🖼️ Depth analysis - Image shape: {image.shape}")
+            
+        except Exception as e:
+            print(f"❌ Image decoding error: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid image data: {str(e)}")
+        
+        # Preprocess image for MiDaS
+        try:
+            processed_image = preprocess_depth_image(image)
+            print(f"📐 Preprocessed for depth: {processed_image.shape}")
+        except Exception as e:
+            print(f"❌ Depth preprocessing error: {e}")
+            raise HTTPException(status_code=500, detail=f"Image preprocessing failed: {str(e)}")
+        
+        # Run MiDaS depth estimation
+        try:
+            input_name = depth_session.get_inputs()[0].name
+            outputs = depth_session.run(None, {input_name: processed_image})
+            depth_map = outputs[0][0]  # Remove batch dimension
+            
+            print(f"📊 Depth map shape: {depth_map.shape}")
+            print(f"📊 Depth range: {depth_map.min():.3f} to {depth_map.max():.3f}")
+            
+        except Exception as e:
+            print(f"❌ MiDaS inference error: {e}")
+            raise HTTPException(status_code=500, detail=f"Depth estimation failed: {str(e)}")
+        
+        # Analyze depth map to extract room information
+        try:
+            analysis_results = analyze_depth_map(depth_map, image)
+            print(f"🔍 Depth analysis complete: laptop detected = {analysis_results['laptop_screen_detected']}")
+            print(f"📏 Phone to laptop distance: {analysis_results['phone_to_laptop_distance']:.2f}m")
+            
+        except Exception as e:
+            print(f"❌ Depth analysis error: {e}")
+            raise HTTPException(status_code=500, detail=f"Depth analysis failed: {str(e)}")
+        
+        processing_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        return DepthAnalysisResult(
+            depth_map_available=True,
+            laptop_screen_detected=analysis_results["laptop_screen_detected"],
+            phone_to_laptop_distance=analysis_results["phone_to_laptop_distance"],
+            wall_boundaries=analysis_results["wall_boundaries"],
+            room_dimensions=analysis_results["room_dimensions"],
+            device_positions=analysis_results["device_positions"],
+            processing_time_ms=processing_time
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Depth analysis failed: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -415,13 +685,26 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model on startup"""
+    """Load models on startup"""
     print("🚀 Starting TrueSight ML Detection Service...")
-    success = load_model()
-    if not success:
-        print("❌ Failed to load model on startup")
-    else:
-        print("✅ Service ready!")
+    
+    # Load DETR model (required)
+    detr_success = load_model()
+    if not detr_success:
+        print("❌ Failed to load DETR model on startup")
+        return
+    
+    # Load MiDaS depth model (optional)
+    depth_success = load_depth_model()
+    if not depth_success:
+        print("⚠️ MiDaS model not loaded - depth analysis will be unavailable")
+        print("📝 To enable depth analysis, place MiDaS ONNX model in models/depth/model.onnx")
+    
+    print("✅ Service ready!")
+    if detr_success and depth_success:
+        print("🔥 All models loaded - full feature set available!")
+    elif detr_success:
+        print("👍 Human detection available - depth analysis disabled")
 
 if __name__ == "__main__":
     import uvicorn

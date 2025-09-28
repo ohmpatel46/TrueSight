@@ -3,9 +3,9 @@ import { io, Socket } from 'socket.io-client';
 import { Peer, MediaConnection } from 'peerjs';
 import VideoTile from './components/VideoTile';
 import Controls from './components/Controls';
-import EventLog from './components/EventLog';
 import PhonePlaceholder from './components/PhonePlaceholder';
 import MalpracticeAlerts from './components/MalpracticeAlerts';
+import RoomSimulation from './components/RoomSimulation';
 
 interface PeerInfo {
   id: string;
@@ -464,20 +464,19 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Malpractice Detection Panel - Only show for interviewer and interviewee-laptop */}
-        {(myRole === 'interviewer' || myRole === 'interviewee-laptop') && (
-          <div className="mt-6">
+        {/* Interviewer Dashboard - Malpractice Detection & Room Simulation */}
+        {myRole === 'interviewer' && (
+          <div className="mt-6 grid gap-6 lg:grid-cols-2">
             <MalpracticeAlerts 
               socket={socket}
               role={myRole}
               latestPhoneFrame={latestPhoneFrame}
             />
+            <RoomSimulation 
+              isConnected={phoneConnected}
+            />
           </div>
         )}
-
-        <div className="mt-6">
-          <EventLog logs={logs} />
-        </div>
 
         {isConnected && (
           <div className="fixed bottom-4 right-4 lg:hidden z-50">
