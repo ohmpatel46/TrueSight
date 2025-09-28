@@ -148,8 +148,8 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun TrueSightApp() {
-        var roomName by remember { mutableStateOf("test-room") }
-        var serverUrl by remember { mutableStateOf("http://192.168.1.137:3001") }
+        var roomName by remember { mutableStateOf("") }
+        var serverUrl by remember { mutableStateOf("http://10.29.154.225:3001") }
 
         val isConnected by socketManager.isConnected.collectAsState()
         val connectionError by socketManager.connectionError.collectAsState()
@@ -248,8 +248,8 @@ class MainActivity : ComponentActivity() {
 
             // Animated title
             Text(
-                text = "TRUESIGHT",
-                fontSize = 42.sp,
+                text = "CheatGPT 4o-4™",
+                fontSize = 36.sp,
                 fontWeight = FontWeight.Black,
                 color = primaryColor,
                 letterSpacing = 4.sp,
