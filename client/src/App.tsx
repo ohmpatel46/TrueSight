@@ -61,7 +61,7 @@ const App: React.FC = () => {
   const updatePeers = (updater: (peers: Map<string, PeerInfo>) => Map<string, PeerInfo>) => {
     setPeers(prev => {
       const newPeers = updater(prev);
-      addLog(`📊 Peers updated: ${newPeers.size} peers total`, 'info');
+      addLog(`Peers updated: ${newPeers.size} peers total`, 'info');
       debugLog('Peer snapshot', Array.from(newPeers.values()).map(p => ({
         id: p.id,
         hasStream: !!p.stream,
@@ -116,7 +116,7 @@ const App: React.FC = () => {
       setPeer(newPeer);
 
       newPeer.on('open', (id) => {
-        addLog(`✅ PeerJS connected with ID: ${id}`, 'success');
+        addLog(`PeerJS connected with ID: ${id}`, 'success');
         setMyPeerId(id);
         debugLog('PeerJS peer opened', { id });
 
@@ -126,7 +126,7 @@ const App: React.FC = () => {
         setSocket(newSocket);
 
         newSocket.on('connect', () => {
-          addLog(`✅ Connected to signaling (${signalingUrl}), socket=${newSocket.id}`, 'success');
+          addLog(`Connected to signaling (${signalingUrl}), socket=${newSocket.id}`, 'success');
           setIsConnected(true);
           newSocket.emit('join-room', { room: roomName, peerId: id });
           addLog(`Joining room: ${roomName}`, 'info');
@@ -135,35 +135,35 @@ const App: React.FC = () => {
         // Handle role assignment from server
         newSocket.on('role-assigned', ({ role }: { role: 'interviewer' | 'interviewee-laptop' }) => {
           setMyRole(role);
-          addLog(`🎭 Assigned role: ${role === 'interviewer' ? 'Interviewer' : 'Interviewee'}`, 'success');
+          addLog(`Assigned role: ${role === 'interviewer' ? 'Interviewer' : 'Interviewee'}`, 'success');
         });
 
         // Handle room full rejection
         newSocket.on('room-full', () => {
-          addLog(`❌ Room is full (max 2 participants + 1 phone)`, 'error');
+          addLog(`Room is full (max 2 participants + 1 phone)`, 'error');
           setIsConnected(false);
         });
 
         newSocket.on('connect_error', (e) => {
-          addLog(`❌ Signaling connection error: ${e.message}`, 'error');
+          addLog(`Signaling connection error: ${e.message}`, 'error');
           setIsConnected(false);
         });
 
         newSocket.on('disconnect', (reason) => {
-          addLog(`⚠️ Disconnected from signaling: ${reason}`, 'warning');
+          addLog(`Disconnected from signaling: ${reason}`, 'warning');
           setIsConnected(false);
         });
 
         // Handle phone connection/disconnection
         newSocket.on('phone-connected', ({ phoneId }: { phoneId: string }) => {
           setPhoneConnected(true);
-          addLog(`📱 Phone connected: ${phoneId}`, 'success');
+          addLog(`Phone connected: ${phoneId}`, 'success');
         });
 
         newSocket.on('phone-disconnected', ({ phoneId }: { phoneId: string }) => {
           setPhoneConnected(false);
           setLatestPhoneFrame('');
-          addLog(`📱 Phone disconnected: ${phoneId}`, 'warning');
+          addLog(`Phone disconnected: ${phoneId}`, 'warning');
         });
 
         // Handle video frames from phone
@@ -182,7 +182,7 @@ const App: React.FC = () => {
           // Call each existing peer
           peers.forEach(peerInfo => {
             if (peerInfo.peerId !== id) { // Don't call ourselves
-              addLog(`📞 Calling existing peer: ${peerInfo.peerId} (${peerInfo.role})`, 'info');
+              addLog(`Calling existing peer: ${peerInfo.peerId} (${peerInfo.role})`, 'info');
               debugLog('Calling peer', peerInfo);
               
               const call = newPeer.call(peerInfo.peerId, stream || new MediaStream());
@@ -193,7 +193,7 @@ const App: React.FC = () => {
               }));
 
               call.on('stream', (remoteStream) => {
-                addLog(`📺 Received stream from ${peerInfo.peerId}`, 'success');
+                addLog(`Received stream from ${peerInfo.peerId}`, 'success');
                 debugLog('Received stream from peer', {
                   peerId: peerInfo.peerId,
                   streamId: remoteStream.id,
@@ -212,7 +212,7 @@ const App: React.FC = () => {
               });
 
               call.on('close', () => {
-                addLog(`📞 Call with ${peerInfo.peerId} closed`, 'warning');
+                addLog(`Call with ${peerInfo.peerId} closed`, 'warning');
                 updatePeers(prev => {
                   const newPeers = new Map(prev);
                   newPeers.delete(peerInfo.peerId);
@@ -221,7 +221,7 @@ const App: React.FC = () => {
               });
 
               call.on('error', (err) => {
-                addLog(`❌ Call error with ${peerInfo.peerId}: ${err}`, 'error');
+                addLog(`Call error with ${peerInfo.peerId}: ${err}`, 'error');
                 debugLog('Call error', { peerId: peerInfo.peerId, error: err });
               });
             }
@@ -259,7 +259,7 @@ const App: React.FC = () => {
       // Handle incoming calls
       newPeer.on('call', (call) => {
         const callerPeerId = call.peer;
-        addLog(`📞 Incoming call from ${callerPeerId}`, 'info');
+        addLog(`Incoming call from ${callerPeerId}`, 'info');
         debugLog('Incoming call', { from: callerPeerId });
 
         // Answer the call with our stream
@@ -271,7 +271,7 @@ const App: React.FC = () => {
         }));
 
         call.on('stream', (remoteStream) => {
-          addLog(`📺 Received stream from ${callerPeerId}`, 'success');
+          addLog(`Received stream from ${callerPeerId}`, 'success');
           debugLog('Received stream from caller', {
             peerId: callerPeerId,
             streamId: remoteStream.id,
@@ -290,7 +290,7 @@ const App: React.FC = () => {
         });
 
         call.on('close', () => {
-          addLog(`📞 Call with ${callerPeerId} closed`, 'warning');
+          addLog(`Call with ${callerPeerId} closed`, 'warning');
           updatePeers(prev => {
             const newPeers = new Map(prev);
             newPeers.delete(callerPeerId);
@@ -299,18 +299,18 @@ const App: React.FC = () => {
         });
 
         call.on('error', (err) => {
-          addLog(`❌ Call error with ${callerPeerId}: ${err}`, 'error');
+          addLog(`Call error with ${callerPeerId}: ${err}`, 'error');
           debugLog('Call error', { peerId: callerPeerId, error: err });
         });
       });
 
       newPeer.on('error', (err) => {
-        addLog(`❌ PeerJS error: ${err}`, 'error');
+        addLog(`PeerJS error: ${err}`, 'error');
         debugLog('PeerJS error', err);
       });
 
       newPeer.on('disconnected', () => {
-        addLog('⚠️ PeerJS disconnected', 'warning');
+        addLog('PeerJS disconnected', 'warning');
       });
 
       newPeer.on('close', () => {
@@ -370,125 +370,170 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-black p-4">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-5xl font-black text-center mb-8 text-cyan-400 tracking-widest animate-pulse drop-shadow-2xl">
-          TRUESIGHT
-        </h1>
-        <p className="text-center text-cyan-300 text-sm tracking-[0.3em] mb-8 opacity-80">
-          Anti-Cheating System
-        </p>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Controls */}
-          <div className="lg:col-span-1">
-            <Controls
-              roomName={roomName}
-              setRoomName={setRoomName}
-              signalingUrl={signalingUrl}
-              setSignalingUrl={setSignalingUrl}
-              isConnected={isConnected}
-              isLocalVideoEnabled={isLocalVideoEnabled}
-              onJoinRoom={joinRoom}
-              onLeaveRoom={leaveRoom}
-              onToggleLocalVideo={toggleLocalVideo}
-            />
-          </div>
+    <div className="min-h-screen bg-slate-900 relative overflow-hidden">
+      {/* Animated background grid */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#0f172a_1px,transparent_1px),linear-gradient(to_bottom,#0f172a_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-20"></div>
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/50 to-transparent"></div>
+      </div>
 
-          {/* Video Grid */}
-          <div className="lg:col-span-3">
-            <div className="bg-gray-900 bg-opacity-90 border border-cyan-400 border-opacity-50 rounded-lg shadow-2xl shadow-cyan-400/20 p-6 backdrop-blur-sm">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-cyan-400 tracking-wider uppercase">
-                  {myRole === 'interviewer' ? '🎯 SURVEILLANCE COMMAND' : 
-                  myRole === 'interviewee-laptop' ? '📡 MONITORED SESSION' : 
-                  'NEURAL STREAMS'}
-                </h2>
-                {isConnected && myPeerId && (
-                  <div className="flex gap-2">
-                    <div className="px-3 py-1 rounded border border-cyan-400 text-sm font-bold bg-cyan-400 bg-opacity-10 text-cyan-400 animate-pulse">
-                      ID: {myPeerId.slice(0, 8)}...
+      {/* Floating orbs */}
+      <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-blue-600/20 rounded-full blur-3xl animate-pulse"></div>
+      <div className="absolute top-3/4 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl animate-pulse delay-1000"></div>
+
+      <div className="relative z-10 p-6">
+        <div className="max-w-7xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-12">
+            <div className="inline-flex items-center justify-center space-x-4 mb-6">
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-2xl shadow-blue-500/25">
+                <div className="w-6 h-6 bg-white rounded-sm"></div>
+              </div>
+              <h1 className="text-6xl font-black bg-gradient-to-r from-blue-400 via-blue-300 to-indigo-400 bg-clip-text text-transparent tracking-tight">
+                TrueSight
+              </h1>
+            </div>
+            <p className="text-blue-300/80 text-lg font-medium tracking-wide">
+              Advanced Interview Monitoring Platform
+            </p>
+            <div className="w-24 h-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full mx-auto mt-4"></div>
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            {/* Controls */}
+            <div className="lg:col-span-1">
+              <div className="bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 shadow-2xl shadow-slate-900/50">
+                <Controls
+                  roomName={roomName}
+                  setRoomName={setRoomName}
+                  signalingUrl={signalingUrl}
+                  setSignalingUrl={setSignalingUrl}
+                  isConnected={isConnected}
+                  isLocalVideoEnabled={isLocalVideoEnabled}
+                  onJoinRoom={joinRoom}
+                  onLeaveRoom={leaveRoom}
+                  onToggleLocalVideo={toggleLocalVideo}
+                />
+              </div>
+            </div>
+
+            {/* Main Content */}
+            <div className="lg:col-span-3">
+              <div className="bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-8 shadow-2xl shadow-slate-900/50">
+                {/* Header */}
+                <div className="flex justify-between items-center mb-8">
+                  <div className="flex items-center space-x-4">
+                    <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-lg shadow-green-400/50"></div>
+                    <h2 className="text-2xl font-bold text-slate-100">
+                      {myRole === 'interviewer' ? 'Interviewer Dashboard' : 
+                      myRole === 'interviewee-laptop' ? 'Interview Session' : 
+                      'Video Streams'}
+                    </h2>
+                  </div>
+                  {isConnected && myPeerId && (
+                    <div className="flex items-center space-x-3">
+                      <div className="px-4 py-2 bg-blue-500/10 border border-blue-400/30 rounded-xl text-blue-300 text-sm font-semibold">
+                        ID: {myPeerId.slice(0, 8)}
+                      </div>
+                      {myRole && (
+                        <div className={`px-4 py-2 rounded-xl border text-sm font-semibold ${
+                          myRole === 'interviewer' 
+                            ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-300' 
+                            : 'bg-purple-500/10 border-purple-400/30 text-purple-300'
+                        }`}>
+                          {myRole === 'interviewer' ? 'Interviewer' : 'Candidate'}
+                        </div>
+                      )}
                     </div>
-                    {myRole && (
-                      <div className={`px-3 py-1 rounded border text-sm font-bold ${
-                        myRole === 'interviewer' 
-                          ? 'border-green-400 bg-green-400 bg-opacity-10 text-green-400' 
-                          : 'border-purple-400 bg-purple-400 bg-opacity-10 text-purple-400'
-                      }`}>
-                        {myRole === 'interviewer' ? 'COMMAND' : 'SUBJECT'}
+                  )}
+                </div>
+                
+                {/* Video Grid */}
+                <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+                  {/* Local Stream */}
+                  {localStream && (
+                    <VideoTile 
+                      stream={localStream} 
+                      peerId="local" 
+                      isLocal={true} 
+                      isEnabled={isLocalVideoEnabled} 
+                    />
+                  )}
+                  
+                  {/* Peer Streams */}
+                  {Array.from(peers.values()).map(peerInfo => {
+                    debugLog(`Rendering peer ${peerInfo.id}, has stream:`, !!peerInfo.stream);
+                    return (
+                      <VideoTile 
+                        key={peerInfo.id} 
+                        stream={peerInfo.stream} 
+                        peerId={peerInfo.id} 
+                        isLocal={false} 
+                        isEnabled={true} 
+                      />
+                    );
+                  })}
+                  
+                  {/* Phone Monitor */}
+                  {isConnected && (
+                    <PhonePlaceholder 
+                      isConnected={phoneConnected}
+                      latestFrame={latestPhoneFrame}
+                      role={myRole}
+                    />
+                  )}
+                </div>
+                
+                {/* Stats */}
+                <div className="mt-8 pt-6 border-t border-slate-700/50">
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span className="text-sm font-medium">
+                      {peers.size + (localStream ? 1 : 0)} Active Participant{(peers.size + (localStream ? 1 : 0)) !== 1 ? 's' : ''}
+                    </span>
+                    {phoneConnected && (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                        <span className="text-sm font-medium text-green-400">Mobile Monitor Active</span>
                       </div>
                     )}
                   </div>
-                )}
-              </div>
-              
-              <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-                {/* Local Stream */}
-                {localStream && (
-                  <VideoTile 
-                    stream={localStream} 
-                    peerId="local" 
-                    isLocal={true} 
-                    isEnabled={isLocalVideoEnabled} 
-                  />
-                )}
-                
-                {/* Peer Streams */}
-                {Array.from(peers.values()).map(peerInfo => {
-                  debugLog(`Rendering peer ${peerInfo.id}, has stream:`, !!peerInfo.stream);
-                  return (
-                    <VideoTile 
-                      key={peerInfo.id} 
-                      stream={peerInfo.stream} 
-                      peerId={peerInfo.id} 
-                      isLocal={false} 
-                      isEnabled={true} 
-                    />
-                  );
-                })}
-                
-                {/* Phone Placeholder - Always show when connected to room */}
-                {isConnected && (
-                  <PhonePlaceholder 
-                    isConnected={phoneConnected}
-                    latestFrame={latestPhoneFrame}
-                    role={myRole}
-                  />
-                )}
-              </div>
-              
-              <div className="mt-4 text-sm text-cyan-300 text-center tracking-wider">
-                {peers.size + (localStream ? 1 : 0)} participant{(peers.size + (localStream ? 1 : 0)) !== 1 ? 's' : ''} in room
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Malpractice Detection Panel - Only show for interviewer and interviewee-laptop */}
-        {(myRole === 'interviewer' || myRole === 'interviewee-laptop') && (
-          <div className="mt-6">
-            <MalpracticeAlerts 
-              socket={socket}
-              role={myRole}
-              latestPhoneFrame={latestPhoneFrame}
-            />
+          {/* Alert Panel */}
+          {(myRole === 'interviewer' || myRole === 'interviewee-laptop') && (
+            <div className="mt-8">
+              <div className="bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl shadow-slate-900/50">
+                <MalpracticeAlerts 
+                  socket={socket}
+                  role={myRole}
+                  latestPhoneFrame={latestPhoneFrame}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Event Log */}
+          <div className="mt-8">
+            <div className="bg-slate-800/40 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl shadow-slate-900/50">
+              <EventLog logs={logs} />
+            </div>
           </div>
-        )}
 
-        <div className="mt-6">
-          <EventLog logs={logs} />
+          {/* Mobile Controls */}
+          {isConnected && (
+            <div className="fixed bottom-6 right-6 lg:hidden z-50">
+              <button
+                onClick={leaveRoom}
+                className="bg-red-600/20 backdrop-blur-xl border border-red-500/50 text-red-400 px-6 py-3 rounded-2xl shadow-2xl shadow-red-600/25 hover:bg-red-600/30 transition-all duration-300 text-sm font-semibold"
+              >
+                End Session
+              </button>
+            </div>
+          )}
         </div>
-
-        {isConnected && (
-          <div className="fixed bottom-4 right-4 lg:hidden z-50">
-            <button
-              onClick={leaveRoom}
-              className="bg-red-600 bg-opacity-20 border border-red-400 text-red-400 px-6 py-3 rounded-full shadow-lg shadow-red-400/20 hover:bg-red-600 hover:bg-opacity-30 focus:outline-none focus:ring-2 focus:ring-red-400 text-sm font-bold tracking-wider animate-pulse"
-            >
-              TERMINATE
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
