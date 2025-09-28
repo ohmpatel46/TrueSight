@@ -458,7 +458,7 @@ const App: React.FC = () => {
                 <div className="w-6 h-6 bg-white rounded-sm"></div>
               </div>
               <h1 className="text-6xl font-black bg-gradient-to-r from-blue-400 via-blue-300 to-indigo-400 bg-clip-text text-transparent tracking-tight">
-                TrueSight
+                CheatGPT 4o-4™
               </h1>
             </div>
             <p className="text-blue-300/80 text-lg font-medium tracking-wide">
