@@ -132,3 +132,6 @@ server/certs/
 .env.local
 .env.development
 .env.production
+
+
+samples/

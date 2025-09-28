@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 interface Alert {
   id: string;
-  type: 'multiple-faces' | 'object-detected' | 'looking-away' | 'movement';
+  type: 'multiple-faces' | 'object-detected' | 'looking-away' | 'movement' | 'overlay-detected' | 'suspicious-activity';
   message: string;
   confidence: number;
   timestamp: Date;
@@ -91,14 +91,25 @@ const MalpracticeAlerts: React.FC<MalpracticeAlertsProps> = ({
         // Old format
         setAlerts(prev => [data.alert, ...prev.slice(0, 9)]);
       } else if (data.alerts && data.alerts.length > 0) {
-        // New ML format
+        // New ML format - handle both human detection and overlay detection
+        let alertType = 'suspicious-activity';
+        let severity: Alert['severity'] = 'medium';
+        
+        if (data.type === 'overlay-detection') {
+          alertType = 'overlay-detected';
+          severity = 'high'; // Overlay detection is always high severity
+        } else if (data.type === 'human-detection') {
+          alertType = 'multiple-faces';
+          severity = data.humans_detected >= 3 ? 'high' : 'medium';
+        }
+        
         const newAlert: Alert = {
           id: `ml-alert-${Date.now()}`,
-          type: 'multiple-faces', // or map data.type
+          type: alertType,
           message: data.alerts.join('; '),
           confidence: Math.round(data.confidence * 100),
           timestamp: new Date(),
-          severity: data.humans_detected >= 3 ? 'high' : 'medium'
+          severity: severity
         };
         setAlerts(prev => [newAlert, ...prev.slice(0, 9)]);
       }
@@ -205,7 +216,7 @@ const MalpracticeAlerts: React.FC<MalpracticeAlertsProps> = ({
 
       {role === 'interviewer' && (
         <div className="mt-4 text-xs text-gray-500 bg-gray-50 p-2 rounded">
-          💡 Advanced ML detection and 2D room analysis coming soon
+          🤖 Advanced ML detection active: Human detection, Overlay detection, 2D room analysis
         </div>
       )}
     </div>

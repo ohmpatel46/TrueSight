@@ -301,6 +301,89 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Handle tab switch detection from interviewee laptop
+  socket.on('tab-switch-detected', async (data: { type: string; timestamp: number; room: string }) => {
+    console.log(`🔄 Tab switch detected from ${socket.id}: ${data.type} in room ${data.room}`);
+    
+    if (data.type === 'away') {
+      // User switched away from interview tab - trigger overlay detection sequence
+      try {
+        console.log(`🎭 [DEMO] Triggering overlay detection sequence for tab switch`);
+        
+        // Call overlay detection endpoint with demo trigger
+        const overlayResponse = await axios.post(`${ML_SERVICE_URL}/detect-overlays`, {
+          data: 'demo_tab_switch_trigger', // Special trigger
+          timestamp: data.timestamp,
+          room: data.room
+        }, {
+          timeout: 5000
+        });
+
+        const overlayResult = overlayResponse.data;
+        console.log(`🎭 [DEMO] Overlay detection triggered by tab switch`);
+
+        // Find interviewer in the room and start sending alerts
+        const roomParticipants = rooms.get(data.room);
+        if (roomParticipants) {
+          const interviewer = Array.from(roomParticipants.values()).find(p => p.role === 'interviewer');
+          if (interviewer) {
+            // Send initial tab switch alert
+            io.to(interviewer.socketId).emit('malpractice-alert', {
+              type: 'overlay-detection',
+              alerts: ['Tab switch detected'],
+              confidence: 0.90,
+              timestamp: Date.now(),
+              overlay_type: 'tab_switch_detected'
+            });
+            console.log(`🚨 Sent tab switch alert to interviewer ${interviewer.peerId}`);
+
+            // Start sending overlay alerts every 2 seconds (4 times)
+            let alertCount = 0;
+            const overlayAlertInterval = setInterval(async () => {
+              alertCount++;
+              
+              if (alertCount <= 4) {
+                try {
+                  // Call overlay detection to get next demo alert
+                  const overlayResponse = await axios.post(`${ML_SERVICE_URL}/detect-overlays`, {
+                    data: 'demo_check_sequence', // Check for next alert in sequence
+                    timestamp: Date.now(),
+                    room: data.room
+                  }, {
+                    timeout: 5000
+                  });
+
+                  const overlayResult = overlayResponse.data;
+                  
+                  if (overlayResult.has_overlay && overlayResult.overlay_type === 'overlay_detected') {
+                    // Send overlay alert
+                    io.to(interviewer.socketId).emit('malpractice-alert', {
+                      type: 'overlay-detection',
+                      alerts: ['Overlay detected'],
+                      confidence: overlayResult.confidence,
+                      timestamp: Date.now(),
+                      overlay_type: 'overlay_detected'
+                    });
+                    console.log(`🚨 Sent overlay alert ${alertCount}/4 to interviewer ${interviewer.peerId}`);
+                  }
+                } catch (error: any) {
+                  console.error(`⚠️ Error sending overlay alert ${alertCount}:`, error.message);
+                }
+              } else {
+                // Stop after 4 alerts
+                clearInterval(overlayAlertInterval);
+                console.log(`🎭 [DEMO] Completed overlay alert sequence`);
+              }
+            }, 2000); // Every 2 seconds
+          }
+        }
+
+      } catch (error: any) {
+        console.error(`⚠️ Error triggering overlay detection on tab switch:`, error.message);
+      }
+    }
+  });
+
   // PeerJS handles all signaling internally, so we can remove the signaling handler
   // The socket server now only manages room membership
 
@@ -339,10 +422,10 @@ io.on('connection', (socket) => {
         rooms.delete(roomName);
         roomCreators.delete(roomName);
         console.log(`Room ${roomName} deleted (empty)`);
-      }
-    });
+        }
+      });
 
-    // Clean up mapping
+      // Clean up mapping
     if (peerId) {
       socketToPeer.delete(socketId);
     }

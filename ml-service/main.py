@@ -10,16 +10,18 @@ import onnxruntime as ort
 import cv2
 import numpy as np
 import base64
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import time
 import os
 import json
+from overlay_detection import OverlayDetector, DetectionResult
 
 app = FastAPI(title="TrueSight ML Detection Service")
 
 # Global model sessions
 session = None  # DETR model for human/phone detection
 depth_session = None  # MiDaS model for depth estimation
+overlay_detector = None  # Overlay detection instance
 
 # Frame history for persistent detection
 frame_history = {}
@@ -56,6 +58,15 @@ class DepthAnalysisResult(BaseModel):
     room_dimensions: Dict[str, float]  # width, height, depth estimates
     device_positions: Dict[str, Dict[str, float]]  # laptop, phone positions in room
     processing_time_ms: float
+
+class OverlayDetectionResult(BaseModel):
+    has_overlay: bool
+    confidence: float
+    overlay_type: Optional[str]
+    suspicious_regions: List[List[int]]  # x, y, w, h for each region
+    analysis_details: Dict[str, Any]
+    processing_time_ms: float
+    timestamp: str
 
 # COCO class names (DETR is typically trained on COCO)
 COCO_CLASSES = [
@@ -675,6 +686,78 @@ async def analyze_depth(request: FrameRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Depth analysis failed: {str(e)}")
 
+@app.post("/detect-overlays", response_model=OverlayDetectionResult)
+async def detect_overlays(request: FrameRequest):
+    """
+    Detect overlay/cheat patterns in phone camera frame
+    Returns overlay detection results with confidence scores
+    """
+    start_time = time.time()
+    
+    if overlay_detector is None:
+        raise HTTPException(status_code=503, detail="Overlay detector not initialized")
+    
+    try:
+        print(f"🔍 [DEBUG] Starting overlay detection for room {request.room}")
+        print(f"🔍 [DEBUG] Input data length: {len(request.data) if request.data else 'None'}")
+        print(f"🔍 [DEBUG] Overlay detector initialized: {overlay_detector is not None}")
+        
+        if not request.data:
+            raise ValueError("No image data provided")
+        
+        # Run overlay detection
+        print(f"🔍 [DEBUG] Calling overlay_detector.detect_overlay()...")
+        detection_result = overlay_detector.detect_overlay(request.data)
+        
+        processing_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        print(f"🎯 [DEBUG] Overlay detection complete:")
+        print(f"  - Has overlay: {detection_result.has_overlay}")
+        print(f"  - Confidence: {detection_result.confidence:.3f}")
+        print(f"  - Type: {detection_result.overlay_type}")
+        print(f"  - Suspicious regions: {len(detection_result.suspicious_regions)}")
+        print(f"  - Analysis details keys: {list(detection_result.analysis_details.keys()) if detection_result.analysis_details else 'None'}")
+        print(f"  - Processing time: {processing_time:.1f}ms")
+        
+        # Debug specific analysis results
+        if detection_result.analysis_details:
+            if 'color_analysis' in detection_result.analysis_details:
+                color_analysis = detection_result.analysis_details['color_analysis']
+                print(f"  - Color analysis: {len(color_analysis)} overlay types checked")
+                for overlay_type, data in color_analysis.items():
+                    if data.get('regions'):
+                        print(f"    * {overlay_type}: {len(data['regions'])} regions found")
+            
+            if 'text_analysis' in detection_result.analysis_details:
+                text_analysis = detection_result.analysis_details['text_analysis']
+                print(f"  - Text analysis: density={text_analysis.get('text_density', 0)}, score={text_analysis.get('suspicious_score', 0):.3f}")
+            
+            if 'video_specific' in detection_result.analysis_details:
+                video_analysis = detection_result.analysis_details['video_specific']
+                print(f"  - Video analysis: confidence={video_analysis.get('overlay_confidence', 0):.3f}")
+        
+        # Convert suspicious regions to the expected format
+        suspicious_regions_list = [
+            [region[0], region[1], region[2], region[3]] 
+            for region in detection_result.suspicious_regions
+        ]
+        
+        return OverlayDetectionResult(
+            has_overlay=detection_result.has_overlay,
+            confidence=detection_result.confidence,
+            overlay_type=detection_result.overlay_type,
+            suspicious_regions=suspicious_regions_list,
+            analysis_details=detection_result.analysis_details,
+            processing_time_ms=processing_time,
+            timestamp=detection_result.timestamp
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Overlay detection error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Overlay detection failed: {str(e)}")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -686,6 +769,7 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup"""
+    global overlay_detector
     print("🚀 Starting TrueSight ML Detection Service...")
     
     # Load DETR model (required)
@@ -700,11 +784,22 @@ async def startup_event():
         print("⚠️ MiDaS model not loaded - depth analysis will be unavailable")
         print("📝 To enable depth analysis, place MiDaS ONNX model in models/depth/model.onnx")
     
+    # Initialize overlay detector
+    try:
+        overlay_detector = OverlayDetector(detection_threshold=0.6)
+        print("✅ Overlay detector initialized")
+        overlay_success = True
+    except Exception as e:
+        print(f"⚠️ Failed to initialize overlay detector: {e}")
+        overlay_success = False
+    
     print("✅ Service ready!")
-    if detr_success and depth_success:
-        print("🔥 All models loaded - full feature set available!")
+    if detr_success and depth_success and overlay_success:
+        print("🔥 All services loaded - full feature set available!")
+    elif detr_success and overlay_success:
+        print("👍 Human detection and overlay detection available - depth analysis disabled")
     elif detr_success:
-        print("👍 Human detection available - depth analysis disabled")
+        print("👍 Human detection available - depth and overlay analysis disabled")
 
 if __name__ == "__main__":
     import uvicorn

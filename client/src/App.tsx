@@ -42,6 +42,7 @@ const App: React.FC = () => {
   const [myRole, setMyRole] = useState<'interviewer' | 'interviewee-laptop' | null>(null);
   const [phoneConnected, setPhoneConnected] = useState(false);
   const [latestPhoneFrame, setLatestPhoneFrame] = useState<string>('');
+  const [depthData, setDepthData] = useState<any>(null);
 
   const DEBUG_ENABLED = true;
 
@@ -56,6 +57,35 @@ const App: React.FC = () => {
     setLogs(prev => [...prev, { timestamp: new Date(), message, type }]);
     // eslint-disable-next-line no-console
     console.log(`[LOG] ${type.toUpperCase()}: ${message}`);
+  };
+
+  const analyzeDepth = async (frameData: string) => {
+    if (!frameData) return;
+    
+    try {
+      console.log('🏠 Analyzing depth data...');
+      const response = await fetch('http://localhost:8000/analyze-depth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          data: frameData,
+          timestamp: Date.now(),
+          room: roomName
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('🏠 Depth analysis result:', result);
+        setDepthData(result);
+      } else {
+        console.error('❌ Depth analysis failed:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Depth analysis error:', error);
+    }
   };
 
   const updatePeers = (updater: (peers: Map<string, PeerInfo>) => Map<string, PeerInfo>) => {
@@ -76,7 +106,36 @@ const App: React.FC = () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       addLog('Warning: Camera/microphone not supported on this device', 'warning');
     }
-  }, []);
+
+    // Tab visibility detection for interviewee laptop
+    const handleVisibilityChange = () => {
+      if (myRole === 'interviewee-laptop' && socket && isConnected) {
+        if (document.hidden) {
+          // User switched away from tab
+          console.log('🔄 Tab switch detected - user left interview tab');
+          socket.emit('tab-switch-detected', { 
+            type: 'away',
+            timestamp: Date.now(),
+            room: roomName
+          });
+        } else {
+          // User returned to tab
+          console.log('🔄 Tab switch detected - user returned to interview tab');
+          socket.emit('tab-switch-detected', { 
+            type: 'back',
+            timestamp: Date.now(),
+            room: roomName
+          });
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [myRole, socket, isConnected, roomName]);
 
   const joinRoom = async () => {
     if (!roomName.trim()) {
@@ -134,6 +193,10 @@ const App: React.FC = () => {
 
         // Handle role assignment from server
         newSocket.on('role-assigned', ({ role }: { role: 'interviewer' | 'interviewee-laptop' }) => {
+          console.log('👤 [ROLE DEBUG] Role assigned by server:', {
+            assignedRole: role,
+            previousRole: myRole
+          });
           setMyRole(role);
           addLog(`Assigned role: ${role === 'interviewer' ? 'Interviewer' : 'Interviewee'}`, 'success');
         });
@@ -171,6 +234,11 @@ const App: React.FC = () => {
           if (data.data) {
             setLatestPhoneFrame(data.data);
             debugLog('Received phone frame', { size: data.data.length, from: data.from });
+            
+            // Analyze depth for room simulation (only for interviewer)
+            if (myRole === 'interviewer') {
+              analyzeDepth(data.data);
+            }
           }
         });
 
@@ -502,18 +570,30 @@ const App: React.FC = () => {
             </div>
           </div>
 
-        {/* Interviewer Dashboard - Malpractice Detection & Room Simulation */}
-        {myRole === 'interviewer' && (
-          <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            <MalpracticeAlerts 
-              socket={socket}
-              role={myRole}
-              latestPhoneFrame={latestPhoneFrame}
-            />
-            <RoomSimulation 
-              isConnected={phoneConnected}
-            />
-          </div>
+          {/* Interviewer Dashboard - Malpractice Detection & Room Simulation */}
+          {myRole === 'interviewer' && (
+            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+              <MalpracticeAlerts 
+                socket={socket}
+                role={myRole}
+                latestPhoneFrame={latestPhoneFrame}
+              />
+              {(() => {
+                console.log('🏠 [APP DEBUG] Rendering RoomSimulation for interviewer', {
+                  myRole,
+                  phoneConnected,
+                  depthData,
+                  isConnected
+                });
+                return (
+                  <RoomSimulation 
+                    depthData={depthData}
+                    isConnected={phoneConnected}
+                  />
+                );
+              })()}
+            </div>
+          )}
 
           {/* Mobile Controls */}
           {isConnected && (
