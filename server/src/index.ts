@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import axios from 'axios';
 
 const app = express();
 const server = createServer(app);
@@ -31,6 +32,9 @@ const socketToPeer = new Map<string, string>();
 
 // Track room creators (first to join = interviewer)
 const roomCreators = new Map<string, string>(); // room -> interviewer peerId
+
+// ML Service configuration
+const ML_SERVICE_URL = 'http://localhost:8000';
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -176,16 +180,93 @@ io.on('connection', (socket) => {
         socket.to(targetRoom).emit('phone-connected', { phoneId });
       }
 
-      // Forward frame to all participants in the room
-      const forwardedData = {
-        ...frameData,
-        room: targetRoom,
-        from: phoneId,
-        serverTimestamp: Date.now()
-      };
+      // Validate base64 data before sending to ML service
+      console.log(`📱 Frame data validation:`, {
+        hasData: !!frameData.data,
+        dataType: typeof frameData.data,
+        dataLength: frameData.data ? frameData.data.length : 0,
+        isBase64Like: frameData.data ? /^[A-Za-z0-9+/]*={0,2}$/.test(frameData.data) : false,
+        startsWithJPEG: frameData.data ? frameData.data.startsWith('/9j/') : false
+      });
 
-      socket.to(targetRoom).emit('video-frame', forwardedData);
-      console.log(`📤 Forwarded phone frame to room ${targetRoom}`);
+      // Send frame to ML service for human detection (async)
+      (async () => {
+        try {
+          const mlResponse = await axios.post(`${ML_SERVICE_URL}/detect-humans`, {
+          data: frameData.data,
+          timestamp: frameData.timestamp || Date.now(),
+          room: targetRoom
+        }, {
+          timeout: 5000 // 5 second timeout
+        });
+
+        const mlResult = mlResponse.data;
+        console.log(`🤖 ML Analysis: ${mlResult.humans_detected} humans, malpractice: ${mlResult.malpractice_detected}`);
+
+        // Forward frame with ML analysis to all participants
+        const forwardedData = {
+          ...frameData,
+          room: targetRoom,
+          from: phoneId,
+          serverTimestamp: Date.now(),
+          mlAnalysis: {
+            humans_detected: mlResult.humans_detected,
+            malpractice_detected: mlResult.malpractice_detected,
+            confidence: mlResult.confidence,
+            processing_time: mlResult.processing_time_ms
+          }
+        };
+
+        socket.to(targetRoom).emit('video-frame', forwardedData);
+        
+        // Send malpractice alerts if detected
+        if (mlResult.malpractice_detected && mlResult.alerts.length > 0) {
+          const roomParticipants = rooms.get(targetRoom);
+          if (roomParticipants) {
+            // Send to interviewer
+            const interviewer = Array.from(roomParticipants.values()).find(p => p.role === 'interviewer');
+            if (interviewer) {
+              io.to(interviewer.socketId).emit('malpractice-alert', {
+                type: 'human-detection',
+                alerts: mlResult.alerts,
+                confidence: mlResult.confidence,
+                timestamp: Date.now(),
+                humans_detected: mlResult.humans_detected,
+                detections: mlResult.human_detections
+              });
+              console.log(`🚨 Sent malpractice alert to interviewer ${interviewer.peerId}`);
+            }
+          }
+        }
+
+        console.log(`📤 Forwarded analyzed frame to room ${targetRoom}`);
+        
+      } catch (mlError: any) {
+        console.error(`❌ ML service error details:`, {
+          message: mlError?.message,
+          code: mlError?.code,
+          response: mlError?.response?.data,
+          status: mlError?.response?.status,
+          url: `${ML_SERVICE_URL}/detect-humans`
+        });
+        
+        // Forward frame without ML analysis as fallback
+        const forwardedData = {
+          ...frameData,
+          room: targetRoom,
+          from: phoneId,
+          serverTimestamp: Date.now(),
+          mlAnalysis: {
+            error: 'ML service unavailable',
+            humans_detected: -1,
+            malpractice_detected: false
+          }
+        };
+
+        socket.to(targetRoom).emit('video-frame', forwardedData);
+        console.log(`📤 Forwarded frame without ML analysis to room ${targetRoom}`);
+      }
+      })(); // End async IIFE
     }
   });
 
@@ -194,7 +275,7 @@ io.on('connection', (socket) => {
     console.log(`🚨 Malpractice alert from ${socket.id}:`, data.alert);
     
     // Find the room this socket belongs to
-    let targetRoom: string | null = data.room;
+    let targetRoom: string | null = data.room || null;
     
     if (!targetRoom) {
       // Find room by socket

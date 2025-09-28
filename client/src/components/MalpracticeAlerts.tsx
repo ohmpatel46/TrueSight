@@ -79,18 +79,38 @@ const MalpracticeAlerts: React.FC<MalpracticeAlertsProps> = ({
     }
   }, [latestPhoneFrame, role]);
 
-  // Listen for alerts from other participants (for interviewer)
+  // Listen for alerts from ML service (for interviewer)
   useEffect(() => {
     if (!socket || role !== 'interviewer') return;
 
-    const handleMalpracticeAlert = (data: { alert: Alert }) => {
-      setAlerts(prev => [data.alert, ...prev.slice(0, 9)]);
+    const handleMalpracticeAlert = (data: any) => {
+      console.log('🚨 Received malpractice alert:', data);
+      
+      // Handle both old format and new ML-based alerts
+      if (data.alert) {
+        // Old format
+        setAlerts(prev => [data.alert, ...prev.slice(0, 9)]);
+      } else if (data.alerts && data.alerts.length > 0) {
+        // New ML format
+        const newAlert: Alert = {
+          id: `ml-alert-${Date.now()}`,
+          type: 'multiple-faces', // or map data.type
+          message: data.alerts.join('; '),
+          confidence: Math.round(data.confidence * 100),
+          timestamp: new Date(),
+          severity: data.humans_detected >= 3 ? 'high' : 'medium'
+        };
+        setAlerts(prev => [newAlert, ...prev.slice(0, 9)]);
+      }
     };
 
+    // Listen to both event types
     socket.on('malpractice-detected', handleMalpracticeAlert);
+    socket.on('malpractice-alert', handleMalpracticeAlert);
 
     return () => {
       socket.off('malpractice-detected', handleMalpracticeAlert);
+      socket.off('malpractice-alert', handleMalpracticeAlert);
     };
   }, [socket, role]);
 
