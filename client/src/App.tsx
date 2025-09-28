@@ -4,6 +4,8 @@ import { Peer, MediaConnection } from 'peerjs';
 import VideoTile from './components/VideoTile';
 import Controls from './components/Controls';
 import EventLog from './components/EventLog';
+import PhonePlaceholder from './components/PhonePlaceholder';
+import MalpracticeAlerts from './components/MalpracticeAlerts';
 
 interface PeerInfo {
   id: string;
@@ -37,6 +39,9 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isLocalVideoEnabled, setIsLocalVideoEnabled] = useState(true);
   const [myPeerId, setMyPeerId] = useState<string>('');
+  const [myRole, setMyRole] = useState<'interviewer' | 'interviewee-laptop' | null>(null);
+  const [phoneConnected, setPhoneConnected] = useState(false);
+  const [latestPhoneFrame, setLatestPhoneFrame] = useState<string>('');
 
   const DEBUG_ENABLED = true;
 
@@ -127,6 +132,18 @@ const App: React.FC = () => {
           addLog(`Joining room: ${roomName}`, 'info');
         });
 
+        // Handle role assignment from server
+        newSocket.on('role-assigned', ({ role }: { role: 'interviewer' | 'interviewee-laptop' }) => {
+          setMyRole(role);
+          addLog(`🎭 Assigned role: ${role === 'interviewer' ? 'Interviewer' : 'Interviewee'}`, 'success');
+        });
+
+        // Handle room full rejection
+        newSocket.on('room-full', () => {
+          addLog(`❌ Room is full (max 2 participants + 1 phone)`, 'error');
+          setIsConnected(false);
+        });
+
         newSocket.on('connect_error', (e) => {
           addLog(`❌ Signaling connection error: ${e.message}`, 'error');
           setIsConnected(false);
@@ -137,55 +154,75 @@ const App: React.FC = () => {
           setIsConnected(false);
         });
 
+        // Handle phone connection/disconnection
+        newSocket.on('phone-connected', ({ phoneId }: { phoneId: string }) => {
+          setPhoneConnected(true);
+          addLog(`📱 Phone connected: ${phoneId}`, 'success');
+        });
+
+        newSocket.on('phone-disconnected', ({ phoneId }: { phoneId: string }) => {
+          setPhoneConnected(false);
+          setLatestPhoneFrame('');
+          addLog(`📱 Phone disconnected: ${phoneId}`, 'warning');
+        });
+
+        // Handle video frames from phone
+        newSocket.on('video-frame', (data: any) => {
+          if (data.data) {
+            setLatestPhoneFrame(data.data);
+            debugLog('Received phone frame', { size: data.data.length, from: data.from });
+          }
+        });
+
         // Handle existing peers in room
-        newSocket.on('existing-peers', ({ peers }: { peers: string[] }) => {
+        newSocket.on('existing-peers', ({ peers }: { peers: Array<{ peerId: string; role: string }> }) => {
           addLog(`Found ${peers.length} existing peers`, 'info');
           debugLog('existing-peers payload', peers);
 
           // Call each existing peer
-          peers.forEach(peerId => {
-            if (peerId !== id) { // Don't call ourselves
-              addLog(`📞 Calling existing peer: ${peerId}`, 'info');
-              debugLog('Calling peer', peerId);
+          peers.forEach(peerInfo => {
+            if (peerInfo.peerId !== id) { // Don't call ourselves
+              addLog(`📞 Calling existing peer: ${peerInfo.peerId} (${peerInfo.role})`, 'info');
+              debugLog('Calling peer', peerInfo);
               
-              const call = newPeer.call(peerId, stream || new MediaStream());
+              const call = newPeer.call(peerInfo.peerId, stream || new MediaStream());
               
-              updatePeers(prev => new Map(prev).set(peerId, { 
-                id: peerId, 
+              updatePeers(prev => new Map(prev).set(peerInfo.peerId, { 
+                id: peerInfo.peerId, 
                 connection: call 
               }));
 
               call.on('stream', (remoteStream) => {
-                addLog(`📺 Received stream from ${peerId}`, 'success');
+                addLog(`📺 Received stream from ${peerInfo.peerId}`, 'success');
                 debugLog('Received stream from peer', {
-                  peerId,
+                  peerId: peerInfo.peerId,
                   streamId: remoteStream.id,
                   tracks: remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}`)
                 });
                 
                 updatePeers(prev => {
                   const newPeers = new Map(prev);
-                  const peerInfo = newPeers.get(peerId);
-                  if (peerInfo) {
-                    peerInfo.stream = remoteStream;
-                    newPeers.set(peerId, peerInfo);
+                  const peer = newPeers.get(peerInfo.peerId);
+                  if (peer) {
+                    peer.stream = remoteStream;
+                    newPeers.set(peerInfo.peerId, peer);
                   }
                   return newPeers;
                 });
               });
 
               call.on('close', () => {
-                addLog(`📞 Call with ${peerId} closed`, 'warning');
+                addLog(`📞 Call with ${peerInfo.peerId} closed`, 'warning');
                 updatePeers(prev => {
                   const newPeers = new Map(prev);
-                  newPeers.delete(peerId);
+                  newPeers.delete(peerInfo.peerId);
                   return newPeers;
                 });
               });
 
               call.on('error', (err) => {
-                addLog(`❌ Call error with ${peerId}: ${err}`, 'error');
-                debugLog('Call error', { peerId, error: err });
+                addLog(`❌ Call error with ${peerInfo.peerId}: ${err}`, 'error');
+                debugLog('Call error', { peerId: peerInfo.peerId, error: err });
               });
             }
           });
@@ -313,6 +350,9 @@ const App: React.FC = () => {
 
     setIsConnected(false);
     setMyPeerId('');
+    setMyRole(null);
+    setPhoneConnected(false);
+    setLatestPhoneFrame('');
     addLog('Left room and closed all connections', 'info');
   };
 
@@ -354,34 +394,60 @@ const App: React.FC = () => {
           <div className="lg:col-span-3">
             <div className="bg-white rounded-lg shadow-lg p-4">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold">Video Streams</h2>
+                <h2 className="text-xl font-semibold">
+                  {myRole === 'interviewer' ? '👨‍💼 Interviewer View' : 
+                   myRole === 'interviewee-laptop' ? '👨‍💻 Interviewee View' : 
+                   'Video Streams'}
+                </h2>
                 {isConnected && myPeerId && (
-                  <div className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-                    🆔 {myPeerId.slice(0, 8)}...
+                  <div className="flex gap-2">
+                    <div className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                      🆔 {myPeerId.slice(0, 8)}...
+                    </div>
+                    {myRole && (
+                      <div className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        myRole === 'interviewer' ? 'bg-green-100 text-green-800' : 'bg-purple-100 text-purple-800'
+                      }`}>
+                        {myRole === 'interviewer' ? '👨‍💼 Interviewer' : '👨‍💻 Interviewee'}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
               
-              <div
-                className={`grid gap-4 ${
-                  (peers.size + (localStream ? 1 : 0)) === 1
-                    ? 'grid-cols-1'
-                    : (peers.size + (localStream ? 1 : 0)) === 2
-                    ? 'grid-cols-1 md:grid-cols-2'
-                    : (peers.size + (localStream ? 1 : 0)) === 3
-                    ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
-                    : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
-                }`}
-              >
+              <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+                {/* Local Stream */}
                 {localStream && (
-                  <VideoTile stream={localStream} peerId="local" isLocal={true} isEnabled={isLocalVideoEnabled} />
+                  <VideoTile 
+                    stream={localStream} 
+                    peerId="local" 
+                    isLocal={true} 
+                    isEnabled={isLocalVideoEnabled} 
+                  />
                 )}
+                
+                {/* Peer Streams */}
                 {Array.from(peers.values()).map(peerInfo => {
                   debugLog(`Rendering peer ${peerInfo.id}, has stream:`, !!peerInfo.stream);
                   return (
-                    <VideoTile key={peerInfo.id} stream={peerInfo.stream} peerId={peerInfo.id} isLocal={false} isEnabled={true} />
+                    <VideoTile 
+                      key={peerInfo.id} 
+                      stream={peerInfo.stream} 
+                      peerId={peerInfo.id} 
+                      isLocal={false} 
+                      isEnabled={true} 
+                    />
                   );
                 })}
+                
+                {/* Phone Placeholder - Always show when connected to room */}
+                {isConnected && (
+                  <PhonePlaceholder 
+                    isConnected={phoneConnected}
+                    latestFrame={latestPhoneFrame}
+                    role={myRole}
+                  />
+                )}
               </div>
               
               <div className="mt-4 text-sm text-gray-600 text-center">
@@ -390,6 +456,17 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {/* Malpractice Detection Panel - Only show for interviewer and interviewee-laptop */}
+        {(myRole === 'interviewer' || myRole === 'interviewee-laptop') && (
+          <div className="mt-6">
+            <MalpracticeAlerts 
+              socket={socket}
+              role={myRole}
+              latestPhoneFrame={latestPhoneFrame}
+            />
+          </div>
+        )}
 
         <div className="mt-6">
           <EventLog logs={logs} />
