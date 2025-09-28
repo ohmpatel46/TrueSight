@@ -589,6 +589,7 @@ const App: React.FC = () => {
                   <RoomSimulation 
                     depthData={depthData}
                     isConnected={phoneConnected}
+                    latestPhoneFrame={latestPhoneFrame}
                   />
                 );
               })()}
