@@ -29,13 +29,13 @@ class ImageStreamManager(
     var onFrameCaptured: ((String) -> Unit)? = null
     private var isStreaming = false
 
-    fun startCamera(onSuccess: () -> Unit, onError: (Exception) -> Unit) {
+    fun startCamera(useBackCamera: Boolean = true, onSuccess: () -> Unit, onError: (Exception) -> Unit) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
         cameraProviderFuture.addListener({
             try {
                 cameraProvider = cameraProviderFuture.get()
-                bindCameraUseCases()
+                bindCameraUseCases(useBackCamera)
                 onSuccess()
                 Log.d("ImageStreamManager", "Camera started successfully")
             } catch (exc: Exception) {
@@ -45,11 +45,19 @@ class ImageStreamManager(
         }, ContextCompat.getMainExecutor(context))
     }
 
-    private fun bindCameraUseCases() {
+    fun switchCamera(useBackCamera: Boolean) {
+        stopStreaming()
+        bindCameraUseCases(useBackCamera)
+    }
+
+    private fun bindCameraUseCases(useBackCamera: Boolean = true) {
         val cameraProvider = cameraProvider ?: return
 
-        // Select back camera as a fallback
-        val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+        val cameraSelector = if (useBackCamera) {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        } else {
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        }
 
         // Image capture use case
         imageCapture = ImageCapture.Builder()

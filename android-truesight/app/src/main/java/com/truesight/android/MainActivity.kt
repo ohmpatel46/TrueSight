@@ -1,6 +1,9 @@
+@file:OptIn(ExperimentalAnimationApi::class)
+
+
 package com.truesight.android
 
-import com.truesight.android.managers.ImageStreamManager
+import androidx.compose.ui.graphics.graphicsLayer
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -9,26 +12,38 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.truesight.android.managers.ImageStreamManager
 import com.truesight.android.managers.SocketManager
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var socketManager: SocketManager
-    private var currentRoom = ""
     private lateinit var imageStreamManager: ImageStreamManager
 
+    private var currentRoom = ""
+    private var isStreaming = false
 
     // Permission launcher
     private val permissionLauncher = registerForActivityResult(
@@ -36,7 +51,7 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val allGranted = permissions.values.all { it }
         if (allGranted) {
-            Toast.makeText(this, "Permissions granted! Ready to connect.", Toast.LENGTH_SHORT).show()
+            initializeCamera()
         } else {
             Toast.makeText(this, "Camera and audio permissions are required", Toast.LENGTH_LONG).show()
         }
@@ -45,7 +60,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize socket manager
+        // Initialize managers
         socketManager = SocketManager()
         imageStreamManager = ImageStreamManager(this, this)
 
@@ -55,6 +70,9 @@ class MainActivity : ComponentActivity() {
 
         // Check permissions
         checkPermissions()
+
+        // Set up streaming callback
+        setupStreamingCallbacks()
 
         // Observe socket events
         observeSocketEvents()
@@ -72,11 +90,35 @@ class MainActivity : ComponentActivity() {
 
         if (missingPermissions.isNotEmpty()) {
             permissionLauncher.launch(missingPermissions.toTypedArray())
+        } else {
+            initializeCamera()
+        }
+    }
+
+    private fun initializeCamera() {
+        imageStreamManager.startCamera(
+            useBackCamera = true, // Always use back camera
+            onSuccess = {
+                Log.d("MainActivity", "Camera initialized successfully")
+                Toast.makeText(this, "Camera ready", Toast.LENGTH_SHORT).show()
+            },
+            onError = { exception ->
+                Log.e("MainActivity", "Camera failed", exception)
+                Toast.makeText(this, "Camera error: ${exception.message}", Toast.LENGTH_LONG).show()
+            }
+        )
+    }
+
+    private fun setupStreamingCallbacks() {
+        imageStreamManager.onFrameCaptured = { base64Frame ->
+            if (currentRoom.isNotEmpty() && isStreaming) {
+                socketManager.sendVideoFrame(base64Frame, currentRoom)
+                Log.d("MainActivity", "Frame sent (${base64Frame.length} chars)")
+            }
         }
     }
 
     private fun observeSocketEvents() {
-        // In observeSocketEvents method, update the existing peer handling:
         lifecycleScope.launch {
             socketManager.existingPeers.collect { peers ->
                 if (peers.isNotEmpty()) {
@@ -87,7 +129,6 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            // Observe new peers joining
             socketManager.peerJoined.collect { peerId ->
                 peerId?.let {
                     Log.d("MainActivity", "New peer joined: $it")
@@ -97,11 +138,9 @@ class MainActivity : ComponentActivity() {
         }
 
         lifecycleScope.launch {
-            // Observe signaling messages
             socketManager.signalingMessage.collect { message ->
                 message?.let {
                     Log.d("MainActivity", "Received signaling: ${it.type} from ${it.from}")
-                    Toast.makeText(this@MainActivity, "Received ${it.type} from ${it.from}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -109,131 +148,67 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun TrueSightApp() {
-        var roomName by remember { mutableStateOf("ohm") }
-        var serverUrl by remember { mutableStateOf("http://192.168.1.137:3001") } // Change this IP
+        var roomName by remember { mutableStateOf("test-room") }
+        var serverUrl by remember { mutableStateOf("http://192.168.1.137:3001") }
 
         val isConnected by socketManager.isConnected.collectAsState()
         val connectionError by socketManager.connectionError.collectAsState()
 
-        MaterialTheme {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background
+        // Dark cybersecurity theme
+        val darkBackground = Color(0xFF0A0A0A)
+        val primaryCyan = Color(0xFF00FFFF)
+        val secondaryPurple = Color(0xFF9C27B0)
+        val errorRed = Color(0xFFFF3366)
+        val successGreen = Color(0xFF00FF88)
+
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = darkBackground
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFF1A1A2E),
+                                Color(0xFF16213E),
+                                Color(0xFF0F0F23)
+                            )
+                        )
+                    )
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-
-                    // Title
-                    Text(
-                        text = "TrueSight Mobile",
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    Spacer(modifier = Modifier.height(32.dp))
-
-                    // Status Card
-                    StatusCard(
-                        title = "Socket Connection",
-                        status = when {
-                            isConnected -> "Connected"
-                            connectionError != null -> "Error: $connectionError"
-                            else -> "Disconnected"
-                        },
-                        isGood = isConnected
-                    )
-                    // Add this after the existing status cards in MainActivity.kt
-                    StatusCard(
-                        title = "Room Status",
-                        status = if (isConnected && currentRoom.isNotEmpty()) "Joined: $currentRoom" else "Not in room",
-                        isGood = isConnected && currentRoom.isNotEmpty()
-                    )
-
-                    Spacer(modifier = Modifier.height(32.dp))
-
-                    // Server URL Input
-                    OutlinedTextField(
-                        value = serverUrl,
-                        onValueChange = { serverUrl = it },
-                        label = { Text("Server URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isConnected
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Room Name Input
-                    OutlinedTextField(
-                        value = roomName,
-                        onValueChange = { roomName = it },
-                        label = { Text("Room Name") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isConnected
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Connect/Disconnect Button
-                    Button(
-                        onClick = {
-                            if (isConnected) {
-                                disconnect()
-                            } else {
-                                connect(serverUrl.trim(), roomName.trim())
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        enabled = roomName.isNotBlank() && serverUrl.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isConnected)
-                                MaterialTheme.colorScheme.error
-                            else
-                                MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text(
-                            text = if (isConnected) "Disconnect" else "Connect to Room",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Medium
-                        )
+                AnimatedContent(
+                    targetState = isConnected && currentRoom.isNotEmpty(),
+                    transitionSpec = {
+                        slideInHorizontally(
+                            initialOffsetX = { it },
+                            animationSpec = tween(800, easing = FastOutSlowInEasing)
+                        ) + fadeIn() with slideOutHorizontally(
+                            targetOffsetX = { -it },
+                            animationSpec = tween(800, easing = FastOutSlowInEasing)
+                        ) + fadeOut()
                     }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Instructions
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ) { showMonitoring ->
+                    if (showMonitoring) {
+                        StreamingInterface(
+                            roomName = currentRoom,
+                            primaryColor = primaryCyan,
+                            errorColor = errorRed,
+                            onDisconnect = { disconnect() }
                         )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Text(
-                                text = "Instructions:",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "1. Make sure your TrueSight server is running on port 3001\n" +
-                                        "2. Update the server URL to your laptop's IP address\n" +
-                                        "3. Enter the same room name as your web client\n" +
-                                        "4. Tap Connect to join the room\n" +
-                                        "5. Check the logs to see connection status",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 14.sp
-                            )
-                        }
+                    } else {
+                        ConnectionInterface(
+                            roomName = roomName,
+                            serverUrl = serverUrl,
+                            isConnected = isConnected,
+                            connectionError = connectionError,
+                            primaryColor = primaryCyan,
+                            errorColor = errorRed,
+                            onRoomNameChange = { roomName = it },
+                            onServerUrlChange = { serverUrl = it },
+                            onConnect = { connect(serverUrl.trim(), roomName.trim()) }
+                        )
                     }
                 }
             }
@@ -241,62 +216,505 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun StatusCard(title: String, status: String, isGood: Boolean) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = if (isGood)
-                    Color(0xFF4CAF50).copy(alpha = 0.1f)
-                else
-                    Color(0xFFF44336).copy(alpha = 0.1f)
+    fun ConnectionInterface(
+        roomName: String,
+        serverUrl: String,
+        isConnected: Boolean,
+        connectionError: String?,
+        primaryColor: Color,
+        errorColor: Color,
+        onRoomNameChange: (String) -> Unit,
+        onServerUrlChange: (String) -> Unit,
+        onConnect: () -> Unit
+    ) {
+        val infiniteTransition = rememberInfiniteTransition()
+
+        val glowAnimation by infiniteTransition.animateFloat(
+            initialValue = 0.3f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
             )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(
+
+            // Animated title
+            Text(
+                text = "TRUESIGHT",
+                fontSize = 42.sp,
+                fontWeight = FontWeight.Black,
+                color = primaryColor,
+                letterSpacing = 4.sp,
+                modifier = Modifier
+                    .shadow(
+                        elevation = 20.dp,
+                        shape = RoundedCornerShape(8.dp),
+                        spotColor = primaryColor.copy(alpha = glowAnimation)
+                    )
+            )
+
+            Text(
+                text = "ANTI-CHEAT SURVEILLANCE",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = primaryColor.copy(alpha = 0.8f),
+                letterSpacing = 2.sp,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Animated status indicator
+            AnimatedStatusCard(
+                title = "SYSTEM STATUS",
+                status = when {
+                    isConnected -> "CONNECTED"
+                    connectionError != null -> "ERROR: ${connectionError.uppercase()}"
+                    else -> "DISCONNECTED"
+                },
+                isGood = isConnected,
+                primaryColor = primaryColor,
+                errorColor = errorColor
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // Futuristic input fields
+            CyberTextField(
+                value = serverUrl,
+                onValueChange = onServerUrlChange,
+                label = "SERVER ENDPOINT",
+                enabled = !isConnected,
+                primaryColor = primaryColor
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            CyberTextField(
+                value = roomName,
+                onValueChange = onRoomNameChange,
+                label = "ROOM IDENTIFIER",
+                enabled = !isConnected,
+                primaryColor = primaryColor
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // Animated connect button
+            AnimatedConnectButton(
+                onClick = onConnect,
+                enabled = roomName.isNotBlank() && serverUrl.isNotBlank() && !isConnected,
+                isConnected = isConnected,
+                primaryColor = primaryColor
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Info panel
+            CyberInfoPanel(primaryColor = primaryColor)
+        }
+    }
+
+    @Composable
+    fun StreamingInterface(
+        roomName: String,
+        primaryColor: Color,
+        errorColor: Color,
+        onDisconnect: () -> Unit
+    ) {
+        val infiniteTransition = rememberInfiniteTransition()
+
+        val scanlineAnimation by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(3000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            )
+        )
+
+        val pulseAnimation by infiniteTransition.animateFloat(
+            initialValue = 0.8f,
+            targetValue = 1.2f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1500, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+
+            // Animated monitoring status
+            Text(
+                text = "SURVEILLANCE ACTIVE",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Black,
+                color = primaryColor,
+                letterSpacing = 3.sp,
+                modifier = Modifier
+                    .shadow(
+                        elevation = 15.dp,
+                        shape = RoundedCornerShape(4.dp),
+                        spotColor = primaryColor.copy(alpha = pulseAnimation * 0.5f)
+                    )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "ROOM: ${roomName.uppercase()}",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = primaryColor.copy(alpha = 0.7f),
+                letterSpacing = 1.5.sp
+            )
+
+            Spacer(modifier = Modifier.height(48.dp))
+
+            // Futuristic monitoring panel
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .shadow(
+                        elevation = 25.dp,
+                        shape = RoundedCornerShape(16.dp),
+                        spotColor = primaryColor.copy(alpha = 0.3f)
+                    )
+                    .border(
+                        width = 2.dp,
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                primaryColor.copy(alpha = 0.5f),
+                                primaryColor,
+                                primaryColor.copy(alpha = 0.5f)
+                            )
+                        ),
+                        shape = RoundedCornerShape(16.dp)
+                    ),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1A1A2E).copy(alpha = 0.9f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Animated camera icon
+                        Text(
+                            text = "🎯",
+                            fontSize = 64.sp,
+                            modifier = Modifier
+                                .graphicsLayer(
+                                    scaleX = pulseAnimation,
+                                    scaleY = pulseAnimation
+                                )
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        Text(
+                            text = "NEURAL FEED ACTIVE",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = primaryColor,
+                            letterSpacing = 1.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "BACK CAMERA • ULTRA-HD STREAMING",
+                            fontSize = 14.sp,
+                            color = primaryColor.copy(alpha = 0.7f),
+                            letterSpacing = 0.5.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Animated progress bar
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .background(
+                                    Color.Gray.copy(alpha = 0.3f),
+                                    RoundedCornerShape(2.dp)
+                                )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(scanlineAnimation)
+                                    .height(4.dp)
+                                    .background(
+                                        primaryColor,
+                                        RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            // Status indicator
+            AnimatedStatusCard(
+                title = "MONITORING PROTOCOL",
+                status = "ACTIVE",
+                isGood = true,
+                primaryColor = primaryColor,
+                errorColor = errorColor
+            )
+
+            Spacer(modifier = Modifier.height(60.dp))
+
+            // Disconnect button
+            Button(
+                onClick = onDisconnect,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+                    .shadow(
+                        elevation = 15.dp,
+                        shape = RoundedCornerShape(30.dp),
+                        spotColor = errorColor.copy(alpha = 0.4f)
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = errorColor,
+                        shape = RoundedCornerShape(30.dp)
+                    ),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Transparent
+                ),
+                shape = RoundedCornerShape(30.dp)
             ) {
                 Text(
-                    text = title,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = status,
-                    color = if (isGood) Color(0xFF4CAF50) else Color(0xFFF44336),
-                    fontWeight = FontWeight.Medium
+                    text = "TERMINATE SESSION",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = errorColor,
+                    letterSpacing = 1.sp
                 )
             }
         }
     }
 
-    private fun startCameraStreaming() {
-        imageStreamManager.startCamera(
-            onSuccess = {
-                Log.d("MainActivity", "Camera started successfully")
-                Toast.makeText(this, "Camera ready", Toast.LENGTH_SHORT).show()
+    @Composable
+    fun AnimatedStatusCard(
+        title: String,
+        status: String,
+        isGood: Boolean,
+        primaryColor: Color,
+        errorColor: Color
+    ) {
+        val statusColor = if (isGood) primaryColor else errorColor
 
-                // Set up frame capture callback
-                imageStreamManager.onFrameCaptured = { base64Frame ->
-                    if (currentRoom.isNotEmpty()) {
-                        socketManager.sendVideoFrame(base64Frame, currentRoom)
-                    }
-                }
+        val infiniteTransition = rememberInfiniteTransition()
+        val blinkAnimation by infiniteTransition.animateFloat(
+            initialValue = 0.3f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            )
+        )
 
-                // Start streaming at 2fps
-                imageStreamManager.startStreaming(2)
-            },
-            onError = { exception ->
-                Log.e("MainActivity", "Camera failed", exception)
-                Toast.makeText(this, "Camera error: ${exception.message}", Toast.LENGTH_LONG).show()
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 12.dp,
+                    shape = RoundedCornerShape(12.dp),
+                    spotColor = statusColor.copy(alpha = 0.3f)
+                )
+                .border(
+                    width = 1.dp,
+                    color = statusColor.copy(alpha = blinkAnimation),
+                    shape = RoundedCornerShape(12.dp)
+                ),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1A1A2E).copy(alpha = 0.8f)
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    letterSpacing = 1.sp
+                )
+                Text(
+                    text = status,
+                    color = statusColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    letterSpacing = 0.5.sp
+                )
             }
+        }
+    }
+
+    @Composable
+    fun CyberTextField(
+        value: String,
+        onValueChange: (String) -> Unit,
+        label: String,
+        enabled: Boolean,
+        primaryColor: Color
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = {
+                Text(
+                    label,
+                    color = primaryColor.copy(alpha = 0.7f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.sp
+                )
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 8.dp,
+                    shape = RoundedCornerShape(12.dp),
+                    spotColor = primaryColor.copy(alpha = 0.2f)
+                ),
+            enabled = enabled,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = primaryColor,
+                unfocusedBorderColor = primaryColor.copy(alpha = 0.5f),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White.copy(alpha = 0.8f),
+                disabledBorderColor = Color.Gray,
+                disabledTextColor = Color.Gray,
+                cursorColor = primaryColor,
+                unfocusedContainerColor = Color(0xFF1A1A2E).copy(alpha = 0.7f),
+                focusedContainerColor = Color(0xFF1A1A2E).copy(alpha = 0.7f)
+            )
         )
     }
 
-    private fun stopCameraStreaming() {
-        imageStreamManager.stopStreaming()
+    @Composable
+    fun AnimatedConnectButton(
+        onClick: () -> Unit,
+        enabled: Boolean,
+        isConnected: Boolean,
+        primaryColor: Color
+    ) {
+        val infiniteTransition = rememberInfiniteTransition()
+        val pulseAnimation by infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            )
+        )
+
+        Button(
+            onClick = onClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp)
+                .shadow(
+                    elevation = if (enabled) 20.dp else 5.dp,
+                    shape = RoundedCornerShape(30.dp),
+                    spotColor = primaryColor.copy(alpha = if (enabled) 0.5f else 0.1f)
+                )
+                .graphicsLayer(
+                    scaleX = if (enabled) pulseAnimation else 1f,
+                    scaleY = if (enabled) pulseAnimation else 1f
+                )
+                .border(
+                    width = 2.dp,
+                    color = if (enabled) primaryColor else Color.Gray,
+                    shape = RoundedCornerShape(30.dp)
+                ),
+            enabled = enabled,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (enabled) primaryColor.copy(alpha = 0.2f) else Color.Transparent,
+                disabledContainerColor = Color.Transparent
+            ),
+            shape = RoundedCornerShape(30.dp)
+        ) {
+            Text(
+                text = if (isConnected) "CONNECTED" else "INITIATE CONNECTION",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (enabled) primaryColor else Color.Gray,
+                letterSpacing = 1.sp
+            )
+        }
     }
+
+    @Composable
+    fun CyberInfoPanel(primaryColor: Color) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 8.dp,
+                    shape = RoundedCornerShape(12.dp),
+                    spotColor = primaryColor.copy(alpha = 0.2f)
+                ),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xFF1A1A2E).copy(alpha = 0.6f)
+            ),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp)
+            ) {
+                Text(
+                    text = "PROTOCOL BRIEFING",
+                    fontWeight = FontWeight.Bold,
+                    color = primaryColor,
+                    fontSize = 14.sp,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Position device to monitor examination area. Neural surveillance algorithms will analyze behavioral patterns in real-time.",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+
     private fun connect(serverUrl: String, roomName: String) {
         if (roomName.isBlank()) {
             Toast.makeText(this, "Please enter a room name", Toast.LENGTH_SHORT).show()
@@ -306,24 +724,31 @@ class MainActivity : ComponentActivity() {
         currentRoom = roomName
         socketManager.connect(serverUrl)
 
-        // Start camera when connecting
-        startCameraStreaming()
-
-        // Wait for connection then join room
+        // Wait for connection then join room and start streaming
         lifecycleScope.launch {
             socketManager.isConnected.collect { isConnected ->
                 if (isConnected && currentRoom.isNotEmpty()) {
                     Log.d("MainActivity", "Connected! Joining room: $currentRoom")
                     socketManager.joinRoom(currentRoom)
+                    startStreaming()
                 }
             }
         }
     }
 
+    private fun startStreaming() {
+        if (!isStreaming) {
+            imageStreamManager.startStreaming(2) // 2 FPS
+            isStreaming = true
+            Log.d("MainActivity", "Started video streaming")
+        }
+    }
+
     private fun disconnect() {
         Log.d("MainActivity", "Disconnecting...")
-        stopCameraStreaming()
+        imageStreamManager.stopStreaming()
         socketManager.disconnect()
+        isStreaming = false
         currentRoom = ""
     }
 
