@@ -370,9 +370,14 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-black p-4">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold text-center mb-8">TrueSight Video Conference</h1>
+        <h1 className="text-5xl font-black text-center mb-8 text-cyan-400 tracking-widest animate-pulse drop-shadow-2xl">
+          TRUESIGHT
+        </h1>
+        <p className="text-center text-cyan-300 text-sm tracking-[0.3em] mb-8 opacity-80">
+          Anti-Cheating System
+        </p>
         
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Controls */}
@@ -392,23 +397,25 @@ const App: React.FC = () => {
 
           {/* Video Grid */}
           <div className="lg:col-span-3">
-            <div className="bg-white rounded-lg shadow-lg p-4">
+            <div className="bg-gray-900 bg-opacity-90 border border-cyan-400 border-opacity-50 rounded-lg shadow-2xl shadow-cyan-400/20 p-6 backdrop-blur-sm">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold">
-                  {myRole === 'interviewer' ? '👨‍💼 Interviewer View' : 
-                   myRole === 'interviewee-laptop' ? '👨‍💻 Interviewee View' : 
-                   'Video Streams'}
+                <h2 className="text-xl font-bold text-cyan-400 tracking-wider uppercase">
+                  {myRole === 'interviewer' ? '🎯 SURVEILLANCE COMMAND' : 
+                  myRole === 'interviewee-laptop' ? '📡 MONITORED SESSION' : 
+                  'NEURAL STREAMS'}
                 </h2>
                 {isConnected && myPeerId && (
                   <div className="flex gap-2">
-                    <div className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
-                      🆔 {myPeerId.slice(0, 8)}...
+                    <div className="px-3 py-1 rounded border border-cyan-400 text-sm font-bold bg-cyan-400 bg-opacity-10 text-cyan-400 animate-pulse">
+                      ID: {myPeerId.slice(0, 8)}...
                     </div>
                     {myRole && (
-                      <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        myRole === 'interviewer' ? 'bg-green-100 text-green-800' : 'bg-purple-100 text-purple-800'
+                      <div className={`px-3 py-1 rounded border text-sm font-bold ${
+                        myRole === 'interviewer' 
+                          ? 'border-green-400 bg-green-400 bg-opacity-10 text-green-400' 
+                          : 'border-purple-400 bg-purple-400 bg-opacity-10 text-purple-400'
                       }`}>
-                        {myRole === 'interviewer' ? '👨‍💼 Interviewer' : '👨‍💻 Interviewee'}
+                        {myRole === 'interviewer' ? 'COMMAND' : 'SUBJECT'}
                       </div>
                     )}
                   </div>
@@ -450,7 +457,7 @@ const App: React.FC = () => {
                 )}
               </div>
               
-              <div className="mt-4 text-sm text-gray-600 text-center">
+              <div className="mt-4 text-sm text-cyan-300 text-center tracking-wider">
                 {peers.size + (localStream ? 1 : 0)} participant{(peers.size + (localStream ? 1 : 0)) !== 1 ? 's' : ''} in room
               </div>
             </div>
@@ -476,9 +483,9 @@ const App: React.FC = () => {
           <div className="fixed bottom-4 right-4 lg:hidden z-50">
             <button
               onClick={leaveRoom}
-              className="bg-red-600 text-white px-6 py-3 rounded-full shadow-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 text-sm font-medium"
+              className="bg-red-600 bg-opacity-20 border border-red-400 text-red-400 px-6 py-3 rounded-full shadow-lg shadow-red-400/20 hover:bg-red-600 hover:bg-opacity-30 focus:outline-none focus:ring-2 focus:ring-red-400 text-sm font-bold tracking-wider animate-pulse"
             >
-              Leave Meeting
+              TERMINATE
             </button>
           </div>
         )}
